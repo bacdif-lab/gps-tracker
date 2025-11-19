@@ -6,11 +6,26 @@ de un dispositivo o un historial de posiciones. También proporciona un
 endpoint de salud para comprobar que la API está corriendo.
 """
 
+from datetime import timedelta
 from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 
-from .database import Position, get_all_positions, get_engine, get_latest_position
-
+from .database import (
+    Position,
+    get_all_positions,
+    get_engine,
+    get_latest_position,
+    User,
+    create_user,
+    get_user,
+)
+from .auth import (
+    verify_password,
+    get_password_hash,
+    create_access_token,
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+)
 
 app = FastAPI(title="GPS Tracking API", version="0.1")
 
@@ -35,6 +50,19 @@ class PositionResponse(BaseModel):
         )
 
 
+class UserCreate(BaseModel):
+    username: str
+    password: str
+
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+
 @app.get("/health")
 async def health():
     """Endpoint de salud para comprobar que la API funciona."""
@@ -55,3 +83,31 @@ async def all_positions(device_id: str, limit: int = 100):
     """Devuelve un historial de posiciones para un dispositivo."""
     positions = get_all_positions(device_id, limit=limit, engine=get_engine())
     return [PositionResponse.from_orm(pos) for pos in positions]
+
+
+@app.post("/register")
+async def register_user(user: UserCreate):
+    """Registra un nuevo usuario."""
+    existing_user = get_user(user.username)
+    if existing_user:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El nombre de usuario ya existe")
+    hashed_password = get_password_hash(user.password)
+    new_user = create_user(user.username, hashed_password)
+    return {"id": new_user.id, "username": new_user.username}
+
+
+@app.post("/token", response_model=Token)
+async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
+    """Genera un token de acceso para un usuario autenticado."""
+    user = get_user(form_data.username)
+    if not user or not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Credenciales incorrectas",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user.username}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
