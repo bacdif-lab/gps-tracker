@@ -20,11 +20,12 @@ from sqlalchemy import (
     Float,
     Integer,
     String,
+    ForeignKey,
     create_engine,
     func,
 )
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session, sessionmaker, relationship
 
 
 # Crea la base declarativa para los modelos
@@ -120,5 +121,75 @@ def get_all_positions(device_id: str, limit: int = 1000, engine=None) -> list[Po
             .limit(limit)
             .all()
         )
+    finally:
+        session.close()
+
+
+class User(Base):
+    """Modelo que representa un usuario de la aplicación."""
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+
+    # Relación con dispositivos
+    devices = relationship("Device", back_populates="user")
+
+
+class Device(Base):
+    """Modelo que representa un dispositivo GPS asociado a un usuario."""
+    __tablename__ = "devices"
+
+    id = Column(String, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    name = Column(String, nullable=True)
+    description = Column(String, nullable=True)
+
+    # Relación con usuario
+    user = relationship("User", back_populates="devices")
+    positions = relationship("Position", backref="device", cascade="all, delete-orphan")
+
+
+def get_user(username: str, engine=None) -> Optional[User]:
+    """Obtiene un usuario por su nombre de usuario."""
+    session = get_session(engine)
+    try:
+        return session.query(User).filter(User.username == username).first()
+    finally:
+        session.close()
+
+
+def create_user(username: str, hashed_password: str, engine=None) -> User:
+    """Crea un nuevo usuario con la contraseña ya hasheada."""
+    session = get_session(engine)
+    try:
+        user = User(username=username, hashed_password=hashed_password)
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        return user
+    finally:
+        session.close()
+
+
+def get_device(device_id: str, engine=None) -> Optional[Device]:
+    """Obtiene un dispositivo por su identificador."""
+    session = get_session(engine)
+    try:
+        return session.query(Device).filter(Device.id == device_id).first()
+    finally:
+        session.close()
+
+
+def create_device(device_id: str, user: User, name: Optional[str] = None, description: Optional[str] = None, engine=None) -> Device:
+    """Crea un nuevo dispositivo asociado a un usuario."""
+    session = get_session(engine)
+    try:
+        device = Device(id=device_id, user_id=user.id, name=name, description=description)
+        session.add(device)
+        session.commit()
+        session.refresh(device)
+        return device
     finally:
         session.close()
