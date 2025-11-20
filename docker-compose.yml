@@ -1,0 +1,95 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: gps
+      POSTGRES_PASSWORD: gps
+      POSTGRES_DB: gps
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./deployments/initdb:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gps -d gps"]
+      interval: 10s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --save 60 1 --loglevel warning
+    ports:
+      - "6379:6379"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      DATABASE_URL: postgresql+psycopg2://gps:gps@db:5432/gps
+      REDIS_URL: redis://redis:6379/0
+      MAP_PROVIDER: mapbox
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    ports:
+      - "8000:8000"
+    command: ["uvicorn", "gps_tracker.api:app", "--host", "0.0.0.0", "--port", "8000"]
+
+  seed:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      DATABASE_URL: postgresql+psycopg2://gps:gps@db:5432/gps
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["python", "scripts/seed_data.py"]
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "8080:80"
+
+  gateway:
+    image: nginx:1.27-alpine
+    depends_on:
+      api:
+        condition: service_started
+      frontend:
+        condition: service_started
+    volumes:
+      - ./deployments/gateway/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./deployments/gateway/certs:/etc/nginx/certs:ro
+    ports:
+      - "8443:443"
+      - "80:80"
+
+  prometheus:
+    image: prom/prometheus:v2.53.2
+    volumes:
+      - ./deployments/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - api
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana-oss:11.1.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
+volumes:
+  db_data:

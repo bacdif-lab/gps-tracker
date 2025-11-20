@@ -1,0 +1,6 @@
+FROM nginx:1.27-alpine
+WORKDIR /usr/share/nginx/html
+COPY frontend/ .
+COPY deployments/gateway/nginx-healthcheck.sh /docker-entrypoint.d/10-healthcheck.sh
+EXPOSE 80
+EXPOSE 443
