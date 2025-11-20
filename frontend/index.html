@@ -4,10 +4,450 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GPS Tracker Dashboard</title>
+    <style>
+        :root {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            color: #1f2937;
+            background: #f5f7fb;
+        }
+        body {
+            margin: 0;
+            padding: 0;
+        }
+        header {
+            background: linear-gradient(120deg, #0ea5e9, #2563eb);
+            color: #fff;
+            padding: 24px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 24px 16px 48px;
+        }
+        h1, h2, h3 {
+            margin: 0 0 12px 0;
+        }
+        section {
+            background: #fff;
+            padding: 16px;
+            border-radius: 12px;
+            margin-bottom: 16px;
+            box-shadow: 0 2px 10px rgba(15,23,42,0.06);
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 12px;
+        }
+        .card {
+            background: #fff;
+            border-radius: 12px;
+            padding: 12px;
+            border: 1px solid #e5e7eb;
+        }
+        .muted {
+            color: #6b7280;
+        }
+        label {
+            display: block;
+            font-weight: 600;
+            margin: 8px 0 4px;
+        }
+        input, select, button, textarea {
+            width: 100%;
+            padding: 8px;
+            border-radius: 8px;
+            border: 1px solid #d1d5db;
+            font-size: 14px;
+        }
+        button {
+            background: #2563eb;
+            color: #fff;
+            border: none;
+            margin-top: 12px;
+            cursor: pointer;
+        }
+        button.secondary { background: #10b981; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 12px;
+        }
+        th, td {
+            padding: 8px;
+            border-bottom: 1px solid #e5e7eb;
+            text-align: left;
+        }
+        .tags span {
+            display: inline-block;
+            background: #eff6ff;
+            color: #1d4ed8;
+            border-radius: 8px;
+            padding: 4px 8px;
+            margin-right: 6px;
+            margin-bottom: 6px;
+        }
+        #map {
+            width: 100%;
+            height: 260px;
+            background: radial-gradient(circle at 20% 30%, #e0f2fe, #bfdbfe);
+            border-radius: 12px;
+            position: relative;
+            overflow: hidden;
+        }
+        .pin {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            background: #ef4444;
+            border-radius: 50%;
+            box-shadow: 0 0 0 6px rgba(239,68,68,0.2);
+        }
+        .flex-between {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+        }
+    </style>
 </head>
 <body>
-    <h1>GPS Tracker Dashboard</h1>
-    <p>Aquí se mostrarán los dispositivos, mapas y reportes.</p>
-    <!-- Futuras integraciones: visualización en tiempo real, zonas geofencing, alertas -->
+    <header>
+        <div class="container">
+            <h1>GPS Tracker Dashboard</h1>
+            <p class="muted">Control de flota, alertas y visibilidad global en tiempo real.</p>
+        </div>
+    </header>
+    <div class="container">
+        <section id="dashboards">
+            <div class="flex-between">
+                <div>
+                    <h2>Dashboards de estado</h2>
+                    <p class="muted">Dispositivos online/offline, alertas recientes, consumo de datos y mapa global.</p>
+                </div>
+                <div>
+                    <button id="refreshDashboard">Actualizar métricas</button>
+                </div>
+            </div>
+            <div class="grid">
+                <div class="card">
+                    <h3>Dispositivos online</h3>
+                    <div id="onlineCount" class="muted">—</div>
+                </div>
+                <div class="card">
+                    <h3>Dispositivos offline</h3>
+                    <div id="offlineCount" class="muted">—</div>
+                </div>
+                <div class="card">
+                    <h3>Alertas recientes</h3>
+                    <ul id="recentAlerts" class="muted"></ul>
+                </div>
+                <div class="card">
+                    <h3>Consumo de datos</h3>
+                    <div id="dataUsage" class="muted">—</div>
+                </div>
+            </div>
+            <div class="card" style="margin-top:12px;">
+                <h3>Mapa global en tiempo real</h3>
+                <div id="map"></div>
+            </div>
+        </section>
+
+        <section id="crud-section">
+            <h2>Gestión maestra (CRUD)</h2>
+            <div class="grid">
+                <div class="card" id="clients-section">
+                    <h3>Clientes</h3>
+                    <label for="clientName">Nombre</label>
+                    <input id="clientName" type="text" placeholder="Acme Corp">
+                    <button onclick="addClient()">Crear cliente</button>
+                    <table id="clientsTable"></table>
+                </div>
+                <div class="card" id="users-section">
+                    <h3>Usuarios</h3>
+                    <label for="userName">Usuario</label>
+                    <input id="userName" type="text" placeholder="operador">
+                    <label for="userRole">Rol</label>
+                    <input id="userRole" type="text" placeholder="admin, viewer">
+                    <button onclick="addUser()">Crear usuario</button>
+                    <table id="usersTable"></table>
+                </div>
+                <div class="card" id="roles-section">
+                    <h3>Roles y permisos (RBAC)</h3>
+                    <label for="roleName">Nombre del rol</label>
+                    <input id="roleName" type="text" placeholder="admin">
+                    <label for="rolePerms">Permisos (coma)</label>
+                    <input id="rolePerms" type="text" placeholder="ver,editar,alertas">
+                    <button onclick="addRole()">Añadir rol</button>
+                    <div id="rolesList" class="tags"></div>
+                </div>
+                <div class="card" id="devices-section">
+                    <h3>Dispositivos</h3>
+                    <label for="deviceName">Nombre</label>
+                    <input id="deviceName" type="text" placeholder="Vehículo 1">
+                    <label for="deviceStatus">Estado</label>
+                    <select id="deviceStatus">
+                        <option value="online">Online</option>
+                        <option value="offline">Offline</option>
+                    </select>
+                    <button onclick="addDevice()">Registrar dispositivo</button>
+                    <table id="devicesTable"></table>
+                </div>
+                <div class="card" id="plans-section">
+                    <h3>Planes de servicio</h3>
+                    <label for="planName">Nombre del plan</label>
+                    <input id="planName" type="text" placeholder="Premium 10GB">
+                    <label for="planData">Datos incluidos (GB)</label>
+                    <input id="planData" type="number" min="0" id="planData">
+                    <button onclick="addPlan()">Crear plan</button>
+                    <table id="plansTable"></table>
+                </div>
+            </div>
+        </section>
+
+        <section id="geofences-section">
+            <h2>Geocercas y plantillas de alertas</h2>
+            <div class="grid">
+                <div class="card">
+                    <h3>Geocercas por cliente</h3>
+                    <label for="geofenceName">Nombre</label>
+                    <input id="geofenceName" type="text" placeholder="Almacén central">
+                    <label for="geofenceClient">Cliente</label>
+                    <input id="geofenceClient" type="text" placeholder="Acme Corp">
+                    <label for="geofenceType">Tipo</label>
+                    <select id="geofenceType">
+                        <option value="circular">Circular</option>
+                        <option value="poligonal">Poligonal</option>
+                    </select>
+                    <button onclick="addGeofence()">Agregar geocerca</button>
+                    <table id="geofencesTable"></table>
+                </div>
+                <div class="card">
+                    <h3>Plantillas de alertas</h3>
+                    <label for="alertName">Nombre</label>
+                    <input id="alertName" type="text" placeholder="Entrada a geocerca">
+                    <label for="alertSeverity">Severidad</label>
+                    <select id="alertSeverity">
+                        <option value="info">Info</option>
+                        <option value="warning">Warning</option>
+                        <option value="critical">Crítica</option>
+                    </select>
+                    <button onclick="addAlertTemplate()">Crear plantilla</button>
+                    <table id="alertsTable"></table>
+                </div>
+            </div>
+        </section>
+
+        <section id="events-section">
+            <h2>Eventos y posiciones</h2>
+            <div class="grid">
+                <div class="card">
+                    <h3>Búsqueda y filtrado</h3>
+                    <label for="eventQuery">Búsqueda</label>
+                    <input id="eventQuery" type="text" placeholder="vehículo, alerta...">
+                    <label for="eventType">Tipo</label>
+                    <select id="eventType">
+                        <option value="">Todos</option>
+                        <option value="alert">Alertas</option>
+                        <option value="position">Posiciones</option>
+                    </select>
+                    <button onclick="filterEvents()">Filtrar</button>
+                </div>
+                <div class="card">
+                    <h3>Exportaciones</h3>
+                    <p class="muted">Genera CSV o PDF con los resultados filtrados.</p>
+                    <button onclick="exportCSV()">Exportar CSV</button>
+                    <button class="secondary" onclick="exportPDF()">Exportar PDF</button>
+                    <pre id="exportPreview" class="muted"></pre>
+                </div>
+            </div>
+            <table id="eventsTable"></table>
+        </section>
+    </div>
+
+    <script>
+        // Datos simulados para los dashboards y CRUD
+        const clients = [{ name: 'Acme Corp' }, { name: 'Globex' }];
+        const roles = [{ name: 'admin', perms: ['ver', 'editar', 'alertas'] }];
+        const users = [
+            { name: 'operador', role: 'admin' },
+            { name: 'viewer', role: 'visualizador' },
+        ];
+        const devices = [
+            { name: 'Vehículo 1', status: 'online', lat: 40.4, lon: -3.7, dataUsed: 2.1 },
+            { name: 'Vehículo 2', status: 'offline', lat: 19.4, lon: -99.1, dataUsed: 1.2 },
+            { name: 'Sensor B', status: 'online', lat: -33.4, lon: -70.6, dataUsed: 0.4 },
+        ];
+        const plans = [{ name: 'Premium 10GB', data: 10 }, { name: 'Básico 2GB', data: 2 }];
+        const geofences = [
+            { name: 'Almacén central', client: 'Acme Corp', type: 'circular' },
+        ];
+        const alertTemplates = [
+            { name: 'Entrada a geocerca', severity: 'warning' },
+            { name: 'Exceso de velocidad', severity: 'critical' },
+        ];
+        const events = [
+            { type: 'alert', description: 'Vehículo 1 entró a geocerca', device: 'Vehículo 1', severity: 'info', timestamp: '2024-04-01 10:04' },
+            { type: 'position', description: 'Vehículo 2 reportó posición', device: 'Vehículo 2', severity: 'info', timestamp: '2024-04-01 10:05' },
+            { type: 'alert', description: 'Exceso de velocidad detectado', device: 'Sensor B', severity: 'critical', timestamp: '2024-04-01 10:06' },
+            { type: 'position', description: 'Vehículo 1 reportó posición', device: 'Vehículo 1', severity: 'info', timestamp: '2024-04-01 10:07' },
+        ];
+
+        function renderTables() {
+            renderTable('clientsTable', ['Cliente'], clients.map(c => [c.name]));
+            renderTable('usersTable', ['Usuario', 'Rol'], users.map(u => [u.name, u.role]));
+            renderRoles();
+            renderTable('devicesTable', ['Dispositivo', 'Estado', 'Datos (GB)'], devices.map(d => [d.name, d.status, d.dataUsed ?? '—']));
+            renderTable('plansTable', ['Plan', 'Datos (GB)'], plans.map(p => [p.name, p.data]));
+            renderTable('geofencesTable', ['Nombre', 'Cliente', 'Tipo'], geofences.map(g => [g.name, g.client, g.type]));
+            renderTable('alertsTable', ['Plantilla', 'Severidad'], alertTemplates.map(a => [a.name, a.severity]));
+            renderEvents(events);
+            updateDashboard();
+            drawMap();
+        }
+
+        function renderTable(id, headers, rows) {
+            const table = document.getElementById(id);
+            const head = `<tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>`;
+            const body = rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('');
+            table.innerHTML = head + body;
+        }
+
+        function renderRoles() {
+            const container = document.getElementById('rolesList');
+            container.innerHTML = roles.map(r => `<span>${r.name} · ${r.perms.join(', ')}</span>`).join('');
+        }
+
+        function renderEvents(list) {
+            renderTable('eventsTable', ['Tipo', 'Descripción', 'Dispositivo', 'Severidad', 'Hora'], list.map(e => [e.type, e.description, e.device, e.severity, e.timestamp]));
+            const alerts = list.filter(e => e.type === 'alert').slice(-3);
+            const alertsList = document.getElementById('recentAlerts');
+            alertsList.innerHTML = alerts.map(a => `<li>${a.description}</li>`).join('');
+        }
+
+        function addClient() {
+            const name = document.getElementById('clientName').value.trim();
+            if (!name) return;
+            clients.push({ name });
+            document.getElementById('clientName').value = '';
+            renderTables();
+        }
+
+        function addUser() {
+            const name = document.getElementById('userName').value.trim();
+            const role = document.getElementById('userRole').value.trim();
+            if (!name || !role) return;
+            users.push({ name, role });
+            document.getElementById('userName').value = '';
+            document.getElementById('userRole').value = '';
+            renderTables();
+        }
+
+        function addRole() {
+            const name = document.getElementById('roleName').value.trim();
+            const perms = document.getElementById('rolePerms').value.split(',').map(p => p.trim()).filter(Boolean);
+            if (!name || !perms.length) return;
+            roles.push({ name, perms });
+            document.getElementById('roleName').value = '';
+            document.getElementById('rolePerms').value = '';
+            renderTables();
+        }
+
+        function addDevice() {
+            const name = document.getElementById('deviceName').value.trim();
+            const status = document.getElementById('deviceStatus').value;
+            if (!name) return;
+            devices.push({ name, status, dataUsed: 0 });
+            document.getElementById('deviceName').value = '';
+            document.getElementById('deviceStatus').value = 'online';
+            renderTables();
+        }
+
+        function addPlan() {
+            const name = document.getElementById('planName').value.trim();
+            const data = Number(document.getElementById('planData').value || 0);
+            if (!name) return;
+            plans.push({ name, data });
+            document.getElementById('planName').value = '';
+            document.getElementById('planData').value = '';
+            renderTables();
+        }
+
+        function addGeofence() {
+            const name = document.getElementById('geofenceName').value.trim();
+            const client = document.getElementById('geofenceClient').value.trim();
+            const type = document.getElementById('geofenceType').value;
+            if (!name || !client) return;
+            geofences.push({ name, client, type });
+            document.getElementById('geofenceName').value = '';
+            document.getElementById('geofenceClient').value = '';
+            renderTables();
+        }
+
+        function addAlertTemplate() {
+            const name = document.getElementById('alertName').value.trim();
+            const severity = document.getElementById('alertSeverity').value;
+            if (!name) return;
+            alertTemplates.push({ name, severity });
+            document.getElementById('alertName').value = '';
+            renderTables();
+        }
+
+        function filterEvents() {
+            const query = document.getElementById('eventQuery').value.toLowerCase();
+            const type = document.getElementById('eventType').value;
+            const filtered = events.filter(e => {
+                const matchesType = !type || e.type === type;
+                const matchesQuery = !query || Object.values(e).some(v => String(v).toLowerCase().includes(query));
+                return matchesType && matchesQuery;
+            });
+            renderEvents(filtered);
+            document.getElementById('exportPreview').textContent = `${filtered.length} registros listos para exportar.`;
+        }
+
+        function exportCSV() {
+            const rows = [['tipo', 'descripcion', 'dispositivo', 'severidad', 'hora'], ...events.map(e => [e.type, e.description, e.device, e.severity, e.timestamp])];
+            const csvContent = rows.map(r => r.map(v => `"${v}"`).join(',')).join('\n');
+            document.getElementById('exportPreview').textContent = csvContent;
+        }
+
+        function exportPDF() {
+            const win = window.open('', 'PRINT', 'height=600,width=800');
+            win.document.write('<html><head><title>Eventos</title></head><body>');
+            win.document.write(document.getElementById('eventsTable').outerHTML);
+            win.document.write('</body></html>');
+            win.document.close();
+            win.focus();
+            win.print();
+        }
+
+        function updateDashboard() {
+            const online = devices.filter(d => d.status === 'online').length;
+            const offline = devices.length - online;
+            document.getElementById('onlineCount').textContent = `${online} activos`;
+            document.getElementById('offlineCount').textContent = `${offline} detenidos`;
+            const totalData = devices.reduce((acc, d) => acc + (d.dataUsed || 0), 0);
+            document.getElementById('dataUsage').textContent = `${totalData.toFixed(1)} GB consumidos`;
+        }
+
+        function drawMap() {
+            const map = document.getElementById('map');
+            map.innerHTML = '';
+            devices.forEach(dev => {
+                const pin = document.createElement('div');
+                pin.className = 'pin';
+                const x = ((dev.lon + 180) / 360) * 100;
+                const y = (1 - ((dev.lat + 90) / 180)) * 100;
+                pin.style.left = `${x}%`;
+                pin.style.top = `${y}%`;
+                pin.title = `${dev.name} (${dev.status})`;
+                map.appendChild(pin);
+            });
+        }
+
+        document.getElementById('refreshDashboard').addEventListener('click', renderTables);
+        renderTables();
+    </script>
 </body>
 </html>
