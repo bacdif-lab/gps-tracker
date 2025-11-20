@@ -6,10 +6,13 @@ de un dispositivo o un historial de posiciones. También proporciona un
 endpoint de salud para comprobar que la API está corriendo.
 """
 
-from datetime import timedelta
-from fastapi import Depends, FastAPI, HTTPException, status
+import asyncio
+import json
+from datetime import datetime, timedelta
+from fastapi import Depends, FastAPI, HTTPException, Header, WebSocket, WebSocketDisconnect, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from pydantic import BaseModel
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 try:
     from prometheus_fastapi_instrumentator import Instrumentator
 except ImportError:  # pragma: no cover - dependencia opcional
@@ -21,9 +24,13 @@ MULTIPART_AVAILABLE = importlib.util.find_spec("multipart") is not None
 
 from .database import (
     Position,
+    create_device,
     get_all_positions,
     get_engine,
     get_latest_position,
+    get_device_by_token,
+    init_db,
+    save_position,
     create_user,
     get_user,
 )
@@ -36,6 +43,9 @@ from .auth import (
 
 app = FastAPI(title="GPS Tracking API", version="0.1")
 
+init_db()
+
+
 if Instrumentator:
     Instrumentator().instrument(app).expose(app)
 
@@ -47,6 +57,8 @@ class PositionResponse(BaseModel):
     longitude: float
     speed: float | None = None
     course: float | None = None
+    ignition: bool | None = None
+    event_type: str | None = None
 
     @classmethod
     def from_orm(cls, position: Position) -> "PositionResponse":
@@ -57,6 +69,8 @@ class PositionResponse(BaseModel):
             longitude=position.longitude,
             speed=position.speed,
             course=position.course,
+            ignition=position.ignition,
+            event_type=position.event_type,
         )
 
 
@@ -71,6 +85,77 @@ class Token(BaseModel):
 
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+
+class IngestPayload(BaseModel):
+    latitude: float = Field(..., description="Latitud en grados decimales")
+    longitude: float = Field(..., description="Longitud en grados decimales")
+    speed: float | None = Field(None, description="Velocidad en km/h")
+    course: float | None = Field(None, description="Rumbo en grados")
+    ignition: bool | None = Field(None, description="Estado de ignición del vehículo")
+    event_type: str | None = Field(None, description="Evento discreto reportado por el dispositivo")
+    timestamp: datetime | None = Field(None, description="Fecha de la posición si el dispositivo la incluye")
+
+    def normalized(self) -> dict:
+        """Normaliza valores y protege contra coordenadas fuera de rango."""
+
+        lat = max(min(self.latitude, 90.0), -90.0)
+        lon = max(min(self.longitude, 180.0), -180.0)
+        ts = self.timestamp or datetime.utcnow()
+        return {
+            "latitude": lat,
+            "longitude": lon,
+            "speed": self.speed,
+            "course": self.course,
+            "ignition": self.ignition,
+            "event_type": self.event_type,
+            "timestamp": ts,
+        }
+
+
+class DeviceRegistration(BaseModel):
+    device_id: str
+    token: str
+    username: str
+    password: str
+    name: str | None = None
+    description: str | None = None
+
+
+class LiveBroadcaster:
+    """Difunde posiciones en vivo a través de WebSockets y SSE."""
+
+    def __init__(self) -> None:
+        self._connections: set[WebSocket] = set()
+        self._event_queue: asyncio.Queue[dict] = asyncio.Queue()
+
+    async def register(self, websocket: WebSocket) -> None:
+        await websocket.accept()
+        self._connections.add(websocket)
+
+    def unregister(self, websocket: WebSocket) -> None:
+        self._connections.discard(websocket)
+
+    async def broadcast(self, payload: dict) -> None:
+        """Envía el payload a clientes conectados y lo añade al stream SSE."""
+
+        stale: list[WebSocket] = []
+        for connection in self._connections:
+            try:
+                await connection.send_json(payload)
+            except Exception:  # pragma: no cover - desconexiones inesperadas
+                stale.append(connection)
+        for connection in stale:
+            self.unregister(connection)
+        await self._event_queue.put(payload)
+
+    async def sse_stream(self):
+        while True:
+            payload = await self._event_queue.get()
+            yield f"data: {json.dumps(payload)}\n\n"
+
+
+broadcaster = LiveBroadcaster()
 
 
 @app.get("/health")
@@ -104,6 +189,68 @@ async def register_user(user: UserCreate):
     hashed_password = get_password_hash(user.password)
     new_user = create_user(user.username, hashed_password)
     return {"id": new_user.id, "username": new_user.username}
+
+
+@app.post("/devices/register")
+async def register_device(body: DeviceRegistration):
+    """Registra un dispositivo y vincula su token de ingestión a un usuario."""
+
+    user = get_user(body.username)
+    if not user or not verify_password(body.password, user.hashed_password):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciales incorrectas")
+
+    device = create_device(
+        device_id=body.device_id,
+        token=body.token,
+        user=user,
+        name=body.name,
+        description=body.description,
+    )
+    return {"device_id": device.id, "token": device.token}
+
+
+@app.post("/ingest/http", response_model=PositionResponse)
+async def ingest_http(
+    payload: IngestPayload,
+    x_device_token: str = Header(..., alias="X-Device-Token"),
+):
+    """Ingesta de posiciones vía HTTP autenticadas por token de dispositivo."""
+
+    device = get_device_by_token(x_device_token)
+    if not device:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token de dispositivo inválido")
+
+    normalized = payload.normalized()
+    engine = get_engine()
+    position = save_position(
+        device_id=device.id,
+        latitude=normalized["latitude"],
+        longitude=normalized["longitude"],
+        speed=normalized["speed"],
+        course=normalized["course"],
+        ignition=normalized["ignition"],
+        event_type=normalized["event_type"],
+        timestamp=normalized["timestamp"],
+        engine=engine,
+    )
+
+    await broadcaster.broadcast(PositionResponse.from_orm(position).dict())
+    return PositionResponse.from_orm(position)
+
+
+@app.websocket("/ws/positions")
+async def websocket_positions(websocket: WebSocket):
+    await broadcaster.register(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        broadcaster.unregister(websocket)
+
+
+@app.get("/stream/sse")
+async def sse_positions():
+    return StreamingResponse(broadcaster.sse_stream(), media_type="text/event-stream")
 
 
 if MULTIPART_AVAILABLE:

@@ -5,7 +5,7 @@ Define un modelo sencillo para almacenar posiciones enviadas por dispositivos
 GPS. Para simplificar, utilizamos SQLite a través de SQLAlchemy.
 
 La tabla `Position` almacena la última posición recibida por cada dispositivo,
-además de un historial de posiciones si se consulta a través de la API.
+demás de un historial de posiciones si se consulta a través de la API.
 
 Para una solución de producción, sería recomendable usar PostgreSQL
 u otro motor relacional escalable y añadir índices geoespaciales.
@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     Float,
@@ -38,17 +39,19 @@ class Position(Base):
     __tablename__ = "positions"
 
     id = Column(Integer, primary_key=True, index=True)
-    device_id = Column(String, index=True, nullable=False)
+    device_id = Column(String, ForeignKey("devices.id"), index=True, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow, index=True)
     latitude = Column(Float, nullable=False)
     longitude = Column(Float, nullable=False)
     speed = Column(Float, nullable=True)
     course = Column(Float, nullable=True)
+    ignition = Column(Boolean, nullable=True)
+    event_type = Column(String, nullable=True)
 
     def __repr__(self) -> str:  # pragma: no cover
         return (
-            f"Position(device_id={{self.device_id}}, lat={{self.latitude}}, "
-            f"lon={{self.longitude}}, timestamp={{self.timestamp}})"
+            f"Position(device_id={self.device_id}, lat={self.latitude}, "
+            f"lon={self.longitude}, timestamp={self.timestamp})"
         )
 
 
@@ -87,20 +90,28 @@ def save_position(
     longitude: float,
     speed: Optional[float] = None,
     course: Optional[float] = None,
+    ignition: Optional[bool] = None,
+    event_type: Optional[str] = None,
+    timestamp: Optional[datetime] = None,
     engine=None,
-) -> None:
-    """Guarda una posición en la base de datos."""
+) -> Position:
+    """Guarda una posición en la base de datos y la devuelve."""
     session = get_session(engine)
     try:
         pos = Position(
             device_id=device_id,
+            timestamp=timestamp or datetime.utcnow(),
             latitude=latitude,
             longitude=longitude,
             speed=speed,
             course=course,
+            ignition=ignition,
+            event_type=event_type,
         )
         session.add(pos)
         session.commit()
+        session.refresh(pos)
+        return pos
     finally:
         session.close()
 
@@ -151,6 +162,7 @@ class Device(Base):
     __tablename__ = "devices"
 
     id = Column(String, primary_key=True, index=True)
+    token = Column(String, unique=True, nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     name = Column(String, nullable=True)
     description = Column(String, nullable=True)
@@ -194,6 +206,7 @@ def get_device(device_id: str, engine=None) -> Optional[Device]:
 def create_device(
     device_id: str,
     user: User,
+    token: str,
     name: Optional[str] = None,
     description: Optional[str] = None,
     engine=None,
@@ -201,10 +214,26 @@ def create_device(
     """Crea un nuevo dispositivo asociado a un usuario."""
     session = get_session(engine)
     try:
-        device = Device(id=device_id, user_id=user.id, name=name, description=description)
+        device = Device(
+            id=device_id,
+            token=token,
+            user_id=user.id,
+            name=name,
+            description=description,
+        )
         session.add(device)
         session.commit()
         session.refresh(device)
         return device
+    finally:
+        session.close()
+
+
+def get_device_by_token(token: str, engine=None) -> Optional[Device]:
+    """Obtiene un dispositivo a partir de su token de autenticación."""
+
+    session = get_session(engine)
+    try:
+        return session.query(Device).filter(Device.token == token).first()
     finally:
         session.close()
