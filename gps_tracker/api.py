@@ -26,7 +26,6 @@ from .database import (
     get_all_positions,
     get_engine,
     get_latest_position,
-    User,
     create_user,
     get_user,
 )
