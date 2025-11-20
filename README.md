@@ -19,3 +19,7 @@ Stack de referencia para rastreo GPS con FastAPI, PostgreSQL/PostGIS y frontend 
 - Prometheus/Grafana se incluyen en `docker-compose.yml` y la API expone `/metrics` instrumentado.
 
 Consulta `docs/architecture.md` para el diagrama de topología y `docs/operations.md` para detalles operativos.
+
+## App móvil
+
+La guía `docs/mobile_app.md` resume stack, seguridad (JWT/OAuth2 + refresh), pantallas clave (mapa en vivo, lista/detalle de vehículos, replay histórico) y lineamientos para alertas push, modo offline y builds hacia TestFlight/Play Store.
