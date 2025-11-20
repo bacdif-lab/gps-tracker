@@ -6,6 +6,7 @@ login_attempts = {}
 MAX_ATTEMPTS = 5
 BLOCK_TIME = 300  # 5 minutos
 
+
 async def limit_login_attempts(request: Request):
     client_ip = request.client.host
     current_time = time()
