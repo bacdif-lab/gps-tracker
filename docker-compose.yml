@@ -77,15 +77,29 @@ services:
     image: prom/prometheus:v2.53.2
     volumes:
       - ./deployments/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deployments/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
     depends_on:
       - api
     ports:
       - "9090:9090"
 
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    volumes:
+      - ./deployments/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
+    depends_on:
+      - prometheus
+    ports:
+      - "9093:9093"
+
   grafana:
     image: grafana/grafana-oss:11.1.0
     environment:
       GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./deployments/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deployments/grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
       - "3000:3000"
     depends_on:

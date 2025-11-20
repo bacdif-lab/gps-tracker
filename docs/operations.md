@@ -15,9 +15,10 @@ Ambos jobs son hooks listos para reemplazar con comandos de infraestructura (Hel
 
 ## Monitorización
 - `prometheus_fastapi_instrumentator` expone `/metrics` en la API.
-- `deployments/prometheus/prometheus.yml` configura el scrape de la API.
-- Grafana (puerto 3000) puede apuntar al datasource Prometheus (`http://prometheus:9090`).
-- Añade dashboards de API y base de datos; importa reglas de alerting según tus SLOs.
+- `deployments/prometheus/prometheus.yml` configura el scrape de la API y carga reglas en `deployments/prometheus/alerts.yml`.
+- Grafana (puerto 3000) usa provisión automática (`deployments/grafana/provisioning`) y dashboards en `deployments/grafana/dashboards`.
+- Alertmanager (puerto 9093) reenvía a webhook/email según `deployments/alertmanager/alertmanager.yml`.
+- Métricas clave, alertas y playbooks documentados en `docs/observability.md`.
 
 ## Logging centralizado
 - La API y el gateway escriben logs en stdout en formato plano; configúralos para JSON si se envían a ELK/CloudWatch.
