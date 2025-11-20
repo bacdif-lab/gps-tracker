@@ -9,7 +9,9 @@ endpoint de salud para comprobar que la API está corriendo.
 import asyncio
 import json
 from datetime import datetime, timedelta
-from fastapi import Depends, FastAPI, HTTPException, Header, WebSocket, WebSocketDisconnect, status
+from fastapi import Depends, FastAPI, HTTPException, Header, Request, WebSocket, WebSocketDisconnect, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -28,6 +30,7 @@ from .database import (
     AlertRule,
     Contact,
     Geofence,
+    AuditLog,
     create_alert,
     create_contact,
     create_device,
@@ -51,15 +54,37 @@ from .database import (
     save_position,
     update_geofence,
     delete_geofence,
+    log_audit_event,
+    update_user_mfa,
 )
 from .auth import (
     verify_password,
     get_password_hash,
     create_access_token,
     ACCESS_TOKEN_EXPIRE_MINUTES,
+    decode_token,
+)
+from .security import (
+    KeyManager,
+    Roles,
+    generate_totp_secret,
+    verify_totp,
+    sign_payload,
+    ensure_role_allowed,
 )
 
+key_manager = KeyManager.from_env()
+
 app = FastAPI(title="GPS Tracking API", version="0.1")
+
+app.add_middleware(HTTPSRedirectMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["Authorization", "Content-Type", "X-CSRF-Token", "X-MFA-Code"],
+)
 
 init_db()
 
@@ -114,6 +139,7 @@ class DateRangeQuery(BaseModel):
 class UserCreate(BaseModel):
     username: str
     password: str
+    role: str | None = None
 
 
 class Token(BaseModel):
@@ -121,7 +147,82 @@ class Token(BaseModel):
     token_type: str
 
 
+class MfaSetupResponse(BaseModel):
+    secret: str
+    username: str
+
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+
+def get_current_user(token: str = Depends(oauth2_scheme)):
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token requerido")
+    try:
+        payload = decode_token(token)
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token inválido")
+    username: str | None = payload.get("sub")
+    if username is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token sin sujeto")
+    user = get_user(username)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuario no encontrado")
+    return user
+
+
+def require_roles(*roles: Roles):
+    def dependency(user=Depends(get_current_user)):
+        if not ensure_role_allowed(user.role, roles):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Rol no autorizado")
+        return user
+
+    return dependency
+
+
+def ensure_username_access(requested_username: str, user) -> None:
+    if user.username != requested_username and user.role not in (Roles.ADMIN.value, Roles.OPERATOR.value):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Operación no permitida")
+
+
+def audit(action: str, username: str, payload: dict):
+    return log_audit_event(username, action, payload, signer=lambda p: sign_payload(key_manager.active_audit_key, p))
+
+
+class RequestRateLimiter:
+    """Rate limiter simple en memoria para limitar abuso y anomalías."""
+
+    def __init__(self, limit_per_minute: int = 120):
+        self.limit_per_minute = limit_per_minute
+        self._counters: dict[str, list[int]] = {}
+
+    def allow(self, client_ip: str) -> bool:
+        now = int(datetime.utcnow().timestamp())
+        window = now - 60
+        timestamps = [ts for ts in self._counters.get(client_ip, []) if ts >= window]
+        timestamps.append(now)
+        self._counters[client_ip] = timestamps
+        return len(timestamps) <= self.limit_per_minute
+
+
+rate_limiter = RequestRateLimiter()
+
+
+@app.middleware("http")
+async def security_headers_and_rate_limit(request: Request, call_next):
+    if request.url.scheme == "http":
+        # HTTPSRedirectMiddleware should handle redirects, but enforce as defense in depth
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="HTTPS requerido")
+
+    client_ip = request.client.host if request.client else "unknown"
+    if not rate_limiter.allow(client_ip):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Límite de peticiones superado")
+
+    response = await call_next(request)
+    response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    return response
 
 
 def get_user_or_404(username: str):
@@ -359,9 +460,14 @@ async def positions_in_range(device_id: str, start: str, end: str):
 
 
 @app.get("/fleet/live", response_model=list[LiveStatus])
-async def fleet_live(username: str, device_id: str | None = None):
+async def fleet_live(
+    username: str,
+    device_id: str | None = None,
+    current_user=Depends(require_roles(Roles.ADMIN, Roles.OPERATOR, Roles.CLIENT, Roles.DRIVER_VIEW)),
+):
     """Vista de mapa en vivo por flota/vehículo con estado principal."""
 
+    ensure_username_access(username, current_user)
     user = get_user_or_404(username)
     devices = list_devices_for_user(user, engine=get_engine())
     if device_id:
@@ -385,13 +491,16 @@ async def fleet_live(username: str, device_id: str | None = None):
 
 @app.post("/register")
 async def register_user(user: UserCreate):
-    """Registra un nuevo usuario."""
+    """Registra un nuevo usuario con rol predefinido y auditable."""
+
     existing_user = get_user(user.username)
     if existing_user:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El nombre de usuario ya existe")
     hashed_password = get_password_hash(user.password)
-    new_user = create_user(user.username, hashed_password)
-    return {"id": new_user.id, "username": new_user.username}
+    role = user.role if user.role in Roles.all() else Roles.CLIENT.value
+    new_user = create_user(user.username, hashed_password, role=role)
+    audit("user.register", user.username, {"role": role})
+    return {"id": new_user.id, "username": new_user.username, "role": role}
 
 
 @app.post("/devices/register")
@@ -442,9 +551,13 @@ async def ingest_http(
 
 
 @app.post("/geofences", response_model=GeofenceResponse)
-async def create_geofence_endpoint(payload: GeofencePayload):
+async def create_geofence_endpoint(
+    payload: GeofencePayload,
+    current_user=Depends(require_roles(Roles.ADMIN, Roles.OPERATOR, Roles.CLIENT)),
+):
     """Crea una geocerca definida por el usuario."""
 
+    ensure_username_access(payload.username, current_user)
     user = get_user_or_404(payload.username)
     geofence = create_geofence(
         user=user,
@@ -454,19 +567,26 @@ async def create_geofence_endpoint(payload: GeofencePayload):
         active=payload.active,
         engine=get_engine(),
     )
+    audit("geofence.create", current_user.username, {"geofence": payload.name})
     return GeofenceResponse.from_orm(geofence)
 
 
 @app.get("/geofences", response_model=list[GeofenceResponse])
-async def list_geofences_endpoint(username: str):
+async def list_geofences_endpoint(username: str, current_user=Depends(require_roles(Roles.ADMIN, Roles.OPERATOR, Roles.CLIENT))):
     user = get_user_or_404(username)
+    ensure_username_access(username, current_user)
     geofences = list_geofences(user, engine=get_engine())
     return [GeofenceResponse.from_orm(g) for g in geofences]
 
 
 @app.put("/geofences/{geofence_id}", response_model=GeofenceResponse)
-async def update_geofence_endpoint(geofence_id: int, payload: GeofencePayload):
+async def update_geofence_endpoint(
+    geofence_id: int,
+    payload: GeofencePayload,
+    current_user=Depends(require_roles(Roles.ADMIN, Roles.OPERATOR)),
+):
     user = get_user_or_404(payload.username)
+    ensure_username_access(payload.username, current_user)
     geofence = get_geofence(geofence_id, user=user, engine=get_engine())
     if not geofence:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Geocerca no encontrada")
@@ -478,22 +598,33 @@ async def update_geofence_endpoint(geofence_id: int, payload: GeofencePayload):
         active=payload.active,
         engine=get_engine(),
     )
+    audit("geofence.update", current_user.username, {"geofence_id": geofence_id})
     return GeofenceResponse.from_orm(updated)
 
 
 @app.delete("/geofences/{geofence_id}")
-async def delete_geofence_endpoint(geofence_id: int, username: str):
+async def delete_geofence_endpoint(
+    geofence_id: int,
+    username: str,
+    current_user=Depends(require_roles(Roles.ADMIN, Roles.OPERATOR)),
+):
     user = get_user_or_404(username)
+    ensure_username_access(username, current_user)
     geofence = get_geofence(geofence_id, user=user, engine=get_engine())
     if not geofence:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Geocerca no encontrada")
     delete_geofence(geofence, engine=get_engine())
+    audit("geofence.delete", current_user.username, {"geofence_id": geofence_id})
     return {"deleted": True}
 
 
 @app.post("/contacts", response_model=ContactResponse)
-async def create_contact_endpoint(payload: ContactPayload):
+async def create_contact_endpoint(
+    payload: ContactPayload,
+    current_user=Depends(require_roles(Roles.ADMIN, Roles.OPERATOR, Roles.CLIENT)),
+):
     user = get_user_or_404(payload.username)
+    ensure_username_access(payload.username, current_user)
     contact = create_contact(
         user=user,
         name=payload.name,
@@ -502,19 +633,27 @@ async def create_contact_endpoint(payload: ContactPayload):
         channel_preferences=payload.channel_preferences,
         engine=get_engine(),
     )
+    audit("contact.create", current_user.username, {"contact": payload.name})
     return ContactResponse.from_orm(contact)
 
 
 @app.get("/contacts", response_model=list[ContactResponse])
-async def list_contacts_endpoint(username: str):
+async def list_contacts_endpoint(
+    username: str, current_user=Depends(require_roles(Roles.ADMIN, Roles.OPERATOR, Roles.CLIENT))
+):
     user = get_user_or_404(username)
+    ensure_username_access(username, current_user)
     contacts = list_contacts(user, engine=get_engine())
     return [ContactResponse.from_orm(contact) for contact in contacts]
 
 
 @app.post("/alerts", response_model=AlertResponse)
-async def create_alert_endpoint(payload: AlertPayload):
+async def create_alert_endpoint(
+    payload: AlertPayload,
+    current_user=Depends(require_roles(Roles.ADMIN, Roles.OPERATOR, Roles.CLIENT)),
+):
     user = get_user_or_404(payload.username)
+    ensure_username_access(payload.username, current_user)
     geofence = None
     if payload.geofence_id is not None:
         geofence = get_geofence(payload.geofence_id, user=user, engine=get_engine())
@@ -534,12 +673,16 @@ async def create_alert_endpoint(payload: AlertPayload):
         active=payload.active,
         engine=get_engine(),
     )
+    audit("alert.create", current_user.username, {"alert": payload.name})
     return AlertResponse.from_orm(alert)
 
 
 @app.get("/alerts", response_model=list[AlertResponse])
-async def list_alerts_endpoint(username: str):
+async def list_alerts_endpoint(
+    username: str, current_user=Depends(require_roles(Roles.ADMIN, Roles.OPERATOR, Roles.CLIENT))
+):
     user = get_user_or_404(username)
+    ensure_username_access(username, current_user)
     alerts = list_alerts(user, engine=get_engine())
     return [AlertResponse.from_orm(alert) for alert in alerts]
 
@@ -607,9 +750,18 @@ def _usage_report(rows: list[Position]) -> str:
 
 
 @app.get("/reports/download")
-async def download_report(device_id: str, username: str, start: str, end: str, report_type: str = "routes", speeding_threshold: float = 80.0):
+async def download_report(
+    device_id: str,
+    username: str,
+    start: str,
+    end: str,
+    report_type: str = "routes",
+    speeding_threshold: float = 80.0,
+    current_user=Depends(require_roles(Roles.ADMIN, Roles.OPERATOR, Roles.CLIENT, Roles.DRIVER_VIEW)),
+):
     """Genera reportes descargables (rutas, paradas, excesos de velocidad, uso horario)."""
 
+    ensure_username_access(username, current_user)
     user = get_user_or_404(username)
     device = get_device(device_id, engine=get_engine())
     if not device or device.user_id != user.id:
@@ -633,11 +785,15 @@ async def download_report(device_id: str, username: str, start: str, end: str, r
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de reporte inválido")
 
     filename = f"{device_id}-{report_type}.csv"
+    audit("report.download", current_user.username, {"device_id": device_id, "report_type": report_type})
     return StreamingResponse(iter([content]), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 
 @app.put("/account/profile", response_model=AccountProfileResponse)
-async def update_account_profile(body: AccountProfilePayload):
+async def update_account_profile(
+    body: AccountProfilePayload, current_user=Depends(require_roles(Roles.ADMIN, Roles.OPERATOR, Roles.CLIENT))
+):
+    ensure_username_access(body.username, current_user)
     user = get_user_or_404(body.username)
     profile = save_account_profile(
         user,
@@ -649,16 +805,30 @@ async def update_account_profile(body: AccountProfilePayload):
         tax_id=body.tax_id,
         engine=get_engine(),
     )
+    audit("account.profile.update", current_user.username, {"username": body.username})
     return AccountProfileResponse.from_orm(profile)
 
 
 @app.get("/account/profile", response_model=AccountProfileResponse)
-async def get_account_profile_endpoint(username: str):
+async def get_account_profile_endpoint(
+    username: str, current_user=Depends(require_roles(Roles.ADMIN, Roles.OPERATOR, Roles.CLIENT, Roles.DRIVER_VIEW))
+):
+    ensure_username_access(username, current_user)
     user = get_user_or_404(username)
     profile = get_account_profile(user, engine=get_engine())
     if not profile:
         profile = save_account_profile(user, engine=get_engine())
     return AccountProfileResponse.from_orm(profile)
+
+
+@app.post("/account/mfa/enable", response_model=MfaSetupResponse)
+async def enable_mfa(current_user=Depends(require_roles(Roles.ADMIN, Roles.OPERATOR, Roles.CLIENT, Roles.DRIVER_VIEW))):
+    """Habilita MFA por TOTP y devuelve el secreto para enrolar."""
+
+    secret = generate_totp_secret()
+    update_user_mfa(current_user, secret, enabled=True, engine=get_engine())
+    audit("account.mfa.enable", current_user.username, {"mfa": True})
+    return MfaSetupResponse(secret=secret, username=current_user.username)
 
 
 @app.websocket("/ws/positions")
@@ -679,8 +849,12 @@ async def sse_positions():
 if MULTIPART_AVAILABLE:
 
     @app.post("/token", response_model=Token)
-    async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
-        """Genera un token de acceso para un usuario autenticado."""
+    async def login_for_access_token(
+        form_data: OAuth2PasswordRequestForm = Depends(),
+        x_mfa_code: str | None = Header(None, alias="X-MFA-Code"),
+    ):
+        """Genera un token de acceso para un usuario autenticado con MFA opcional."""
+
         user = get_user(form_data.username)
         if not user or not verify_password(form_data.password, user.hashed_password):
             raise HTTPException(
@@ -688,10 +862,15 @@ if MULTIPART_AVAILABLE:
                 detail="Credenciales incorrectas",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        if user.mfa_enabled:
+            if not x_mfa_code or not user.mfa_secret or not verify_totp(user.mfa_secret, x_mfa_code):
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="MFA requerido o inválido")
+
         access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         access_token = create_access_token(
             data={"sub": user.username}, expires_delta=access_token_expires
         )
+        audit("auth.login", user.username, {"mfa": user.mfa_enabled})
         return {"access_token": access_token, "token_type": "bearer"}
 else:
 
@@ -700,7 +879,7 @@ else:
         password: str
 
     @app.post("/token", response_model=Token)
-    async def login_for_access_token_json(body: LoginBody):
+    async def login_for_access_token_json(body: LoginBody, x_mfa_code: str | None = Header(None, alias="X-MFA-Code")):
         """Alternativa JSON cuando no está disponible python-multipart."""
 
         user = get_user(body.username)
@@ -710,10 +889,15 @@ else:
                 detail="Credenciales incorrectas",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        if user.mfa_enabled:
+            if not x_mfa_code or not user.mfa_secret or not verify_totp(user.mfa_secret, x_mfa_code):
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="MFA requerido o inválido")
+
         access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         access_token = create_access_token(
             data={"sub": user.username}, expires_delta=access_token_expires
         )
+        audit("auth.login", user.username, {"mfa": user.mfa_enabled})
         return {"access_token": access_token, "token_type": "bearer"}
 
 

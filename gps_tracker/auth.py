@@ -12,10 +12,12 @@ from typing import Optional
 from jose import jwt
 from passlib.context import CryptContext
 
-# Clave secreta para firmar los tokens. En producción, obtener de variables de entorno.
-SECRET_KEY = "change-this-secret"
+from .security import KeyManager
+
+# Clave secreta gestionada por un key manager (p.ej. Vault/SM)
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
+KEY_MANAGER = KeyManager.from_env()
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -31,9 +33,21 @@ def get_password_hash(password: str) -> str:
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    """Crea un token JWT con una expiración opcional."""
+    """Crea un token JWT con una expiración opcional usando la clave activa."""
+
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    encoded_jwt = jwt.encode(to_encode, KEY_MANAGER.active_jwt_key, algorithm=ALGORITHM)
     return encoded_jwt
+
+
+def decode_token(token: str) -> dict:
+    """Intenta decodificar el token contra todas las claves activas (rotación)."""
+
+    for key in KEY_MANAGER.jwt_keys:
+        try:
+            return jwt.decode(token, key, algorithms=[ALGORITHM])
+        except Exception:
+            continue
+    raise jwt.JWTError("Invalid token")
