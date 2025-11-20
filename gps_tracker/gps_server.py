@@ -20,6 +20,7 @@ import logging
 from typing import Optional
 
 from .database import init_db, save_position
+from .protocols import DecodedPosition, decode_with
 
 
 logging.basicConfig(level=logging.INFO)
@@ -45,35 +46,53 @@ class GPSServer:
             logger.debug("Datos recibidos: %s", message)
             # Procesar el mensaje
             try:
-                device_id, lat_str, lon_str, *rest = message.split(",")
-                latitude = float(lat_str)
-                longitude = float(lon_str)
-                speed: Optional[float] = None
-                course: Optional[float] = None
-                if rest:
-                    # La velocidad puede ser proporcionada (rest[0])
-                    try:
-                        speed = float(rest[0]) if rest[0] else None
-                    except ValueError:
-                        speed = None
-                if len(rest) > 1:
-                    try:
-                        course = float(rest[1]) if rest[1] else None
-                    except ValueError:
-                        course = None
-                save_position(device_id, latitude, longitude, speed, course)
+                decoded = self._decode_message(message)
+                save_position(
+                    decoded.device_id,
+                    decoded.latitude,
+                    decoded.longitude,
+                    decoded.speed,
+                    decoded.course,
+                    event_type=decoded.event_type,
+                    timestamp=decoded.timestamp,
+                )
                 logger.info(
-                    "Posición guardada de %s: lat=%s, lon=%s, speed=%s, course=%s",
-                    device_id,
-                    latitude,
-                    longitude,
-                    speed,
-                    course,
+                    "Posición guardada de %s: lat=%s, lon=%s, speed=%s, course=%s (%s)",
+                    decoded.device_id,
+                    decoded.latitude,
+                    decoded.longitude,
+                    decoded.speed,
+                    decoded.course,
+                    decoded.event_type,
                 )
             except Exception as exc:
                 logger.error("Error procesando mensaje %s: %s", message, exc)
         writer.close()
         await writer.wait_closed()
+
+    def _decode_message(self, message: str) -> DecodedPosition:
+        """Intenta decodificar con adaptadores populares o CSV genérico."""
+
+        if "|" in message:
+            protocol, raw = message.split("|", 1)
+            return decode_with(protocol.strip(), raw.encode())
+
+        device_id, lat_str, lon_str, *rest = message.split(",")
+        latitude = float(lat_str)
+        longitude = float(lon_str)
+        speed: Optional[float] = None
+        course: Optional[float] = None
+        if rest:
+            try:
+                speed = float(rest[0]) if rest[0] else None
+            except ValueError:
+                speed = None
+        if len(rest) > 1:
+            try:
+                course = float(rest[1]) if rest[1] else None
+            except ValueError:
+                course = None
+        return DecodedPosition(device_id=device_id, latitude=latitude, longitude=longitude, speed=speed, course=course)
 
     async def start(self) -> None:
         server = await asyncio.start_server(self.handle_client, self.host, self.port)
