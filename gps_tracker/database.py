@@ -11,6 +11,7 @@ Para una solución de producción, sería recomendable usar PostgreSQL
 u otro motor relacional escalable y añadir índices geoespaciales.
 """
 
+import os
 from datetime import datetime
 from typing import Optional
 
@@ -52,9 +53,18 @@ class Position(Base):
         )
 
 
-def get_engine(db_url: str = "sqlite:///./gps_data.db"):
-    """Inicializa el motor de base de datos."""
-    return create_engine(db_url, connect_args={"check_same_thread": False})
+def get_engine(db_url: str | None = None):
+    """Inicializa el motor de base de datos.
+
+    Se prioriza la variable de entorno ``DATABASE_URL`` y se cae en SQLite
+    para entornos locales cuando no está definida. Si se utiliza SQLite,
+    se agregan los ``connect_args`` adecuados para permitir conexiones
+    multi-hilo durante pruebas o desarrollo.
+    """
+
+    url = db_url or os.getenv("DATABASE_URL", "sqlite:///./gps_data.db")
+    connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
+    return create_engine(url, connect_args=connect_args, pool_pre_ping=True)
 
 
 def init_db(engine=None) -> None:

@@ -10,6 +10,16 @@ from datetime import timedelta
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+except ImportError:  # pragma: no cover - dependencia opcional
+    Instrumentator = None
+try:  # pragma: no cover - dependencia opcional en entorno de CI
+    import multipart  # type: ignore
+
+    MULTIPART_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    MULTIPART_AVAILABLE = False
 
 from .database import (
     Position,
@@ -28,6 +38,9 @@ from .auth import (
 )
 
 app = FastAPI(title="GPS Tracking API", version="0.1")
+
+if Instrumentator:
+    Instrumentator().instrument(app).expose(app)
 
 
 class PositionResponse(BaseModel):
@@ -96,18 +109,42 @@ async def register_user(user: UserCreate):
     return {"id": new_user.id, "username": new_user.username}
 
 
-@app.post("/token", response_model=Token)
-async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
-    """Genera un token de acceso para un usuario autenticado."""
-    user = get_user(form_data.username)
-    if not user or not verify_password(form_data.password, user.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Credenciales incorrectas",
-            headers={"WWW-Authenticate": "Bearer"},
+if MULTIPART_AVAILABLE:
+
+    @app.post("/token", response_model=Token)
+    async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
+        """Genera un token de acceso para un usuario autenticado."""
+        user = get_user(form_data.username)
+        if not user or not verify_password(form_data.password, user.hashed_password):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Credenciales incorrectas",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": user.username}, expires_delta=access_token_expires
         )
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user.username}, expires_delta=access_token_expires
-    )
-    return {"access_token": access_token, "token_type": "bearer"}
+        return {"access_token": access_token, "token_type": "bearer"}
+else:
+
+    class LoginBody(BaseModel):
+        username: str
+        password: str
+
+    @app.post("/token", response_model=Token)
+    async def login_for_access_token_json(body: LoginBody):
+        """Alternativa JSON cuando no está disponible python-multipart."""
+
+        user = get_user(body.username)
+        if not user or not verify_password(body.password, user.hashed_password):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Credenciales incorrectas",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": user.username}, expires_delta=access_token_expires
+        )
+        return {"access_token": access_token, "token_type": "bearer"}

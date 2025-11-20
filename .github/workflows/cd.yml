@@ -1,0 +1,35 @@
+name: CD
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  staging:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and push images (placeholder)
+        run: |
+          echo "Building API image"
+          docker build -f Dockerfile.api -t ghcr.io/${{ github.repository }}-api:staging .
+          echo "Pushing to registry placeholder"
+      - name: Deploy to staging
+        run: echo "Trigger deploy to staging infrastructure"
+
+  production:
+    runs-on: ubuntu-latest
+    needs: staging
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and push images (placeholder)
+        run: |
+          echo "Building API image"
+          docker build -f Dockerfile.api -t ghcr.io/${{ github.repository }}-api:prod .
+          echo "Pushing to registry placeholder"
+      - name: Deploy to production (manual gate)
+        if: github.event_name == 'workflow_dispatch'
+        run: echo "Trigger deploy to production infrastructure"
