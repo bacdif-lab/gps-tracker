@@ -6,8 +6,9 @@ configurables como geocercas, alertas y contactos. Utiliza SQLite
 por defecto para facilitar las pruebas locales.
 """
 
+import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from sqlalchemy import (
@@ -59,6 +60,10 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
+    role = Column(String, default="cliente", nullable=False)
+    mfa_enabled = Column(Boolean, default=False, nullable=False)
+    mfa_secret = Column(String, nullable=True)
+    last_mfa_rotation = Column(DateTime, nullable=True)
 
     # Relación con dispositivos
     devices = relationship("Device", back_populates="user")
@@ -147,6 +152,19 @@ class AccountProfile(Base):
     user = relationship("User", backref="account_profile", uselist=False)
 
 
+class AuditLog(Base):
+    """Registro firmado de acciones sensibles."""
+
+    __tablename__ = "audit_logs"
+
+    id = Column(Integer, primary_key=True)
+    username = Column(String, nullable=False)
+    action = Column(String, nullable=False)
+    details = Column(Text, nullable=False)
+    signature = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 # Funciones de infraestructura base
 
 def get_engine(db_url: str | None = None):
@@ -168,6 +186,9 @@ def init_db(engine=None) -> None:
     if engine is None:
         engine = get_engine()
     Base.metadata.create_all(bind=engine)
+    retention_days = int(os.getenv("RETENTION_DAYS", "0"))
+    if retention_days:
+        purge_positions_older_than(retention_days, engine=engine)
 
 
 def get_session(engine=None) -> Session:
@@ -270,12 +291,26 @@ def get_user(username: str, engine=None) -> Optional[User]:
         session.close()
 
 
-def create_user(username: str, hashed_password: str, engine=None) -> User:
+def create_user(username: str, hashed_password: str, role: str = "cliente", engine=None) -> User:
     """Crea un nuevo usuario con la contraseña ya hasheada."""
     session = get_session(engine)
     try:
-        user = User(username=username, hashed_password=hashed_password)
+        user = User(username=username, hashed_password=hashed_password, role=role)
         session.add(user)
+        session.commit()
+        session.refresh(user)
+        return user
+    finally:
+        session.close()
+
+
+def update_user_mfa(user: User, secret: str, enabled: bool = True, engine=None) -> User:
+    session = get_session(engine)
+    try:
+        user.mfa_secret = secret
+        user.mfa_enabled = enabled
+        user.last_mfa_rotation = datetime.utcnow()
+        session.merge(user)
         session.commit()
         session.refresh(user)
         return user
@@ -314,6 +349,40 @@ def create_device(
         session.commit()
         session.refresh(device)
         return device
+    finally:
+        session.close()
+
+
+def log_audit_event(username: str, action: str, payload: dict, signer, engine=None) -> AuditLog:
+    """Guarda un evento de auditoría firmado."""
+
+    session = get_session(engine)
+    serialized = json.dumps(payload, sort_keys=True)
+    signature = signer(serialized)
+    try:
+        record = AuditLog(
+            username=username,
+            action=action,
+            details=serialized,
+            signature=signature,
+        )
+        session.add(record)
+        session.commit()
+        session.refresh(record)
+        return record
+    finally:
+        session.close()
+
+
+def purge_positions_older_than(days: int, engine=None) -> int:
+    """Borra y anonimizas posiciones más allá de la retención configurada."""
+
+    session = get_session(engine)
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    try:
+        deleted = session.query(Position).filter(Position.timestamp < cutoff).delete()
+        session.commit()
+        return deleted
     finally:
         session.close()
 
