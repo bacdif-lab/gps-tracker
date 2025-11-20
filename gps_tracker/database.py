@@ -22,7 +22,6 @@ from sqlalchemy import (
     String,
     ForeignKey,
     create_engine,
-    func,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session, sessionmaker, relationship
@@ -47,8 +46,8 @@ class Position(Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return (
-            f"Position(device_id={self.device_id}, lat={self.latitude}, "
-            f"lon={self.longitude}, timestamp={self.timestamp})"
+            f"Position(device_id={{self.device_id}}, lat={{self.latitude}}, "
+            f"lon={{self.longitude}}, timestamp={{self.timestamp}})"
         )
 
 
@@ -182,7 +181,13 @@ def get_device(device_id: str, engine=None) -> Optional[Device]:
         session.close()
 
 
-def create_device(device_id: str, user: User, name: Optional[str] = None, description: Optional[str] = None, engine=None) -> Device:
+def create_device(
+    device_id: str,
+    user: User,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    engine=None,
+) -> Device:
     """Crea un nuevo dispositivo asociado a un usuario."""
     session = get_session(engine)
     try:
