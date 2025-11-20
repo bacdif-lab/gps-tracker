@@ -17,12 +17,10 @@ try:
     from prometheus_fastapi_instrumentator import Instrumentator
 except ImportError:  # pragma: no cover - dependencia opcional
     Instrumentator = None
-try:  # pragma: no cover - dependencia opcional en entorno de CI
-    import multipart  # type: ignore
 
-    MULTIPART_AVAILABLE = True
-except ImportError:  # pragma: no cover
-    MULTIPART_AVAILABLE = False
+import importlib.util
+
+MULTIPART_AVAILABLE = importlib.util.find_spec("multipart") is not None
 
 from .database import (
     Position,
@@ -294,3 +292,5 @@ else:
             data={"sub": user.username}, expires_delta=access_token_expires
         )
         return {"access_token": access_token, "token_type": "bearer"}
+
+
