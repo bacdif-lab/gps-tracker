@@ -72,8 +72,15 @@ from .security import (
     sign_payload,
     ensure_role_allowed,
 )
+from .integrations.maps import MapService, parse_coordinate_pair
+from .integrations.notifications import NotificationMessage, NotificationService
+from .payments import PaymentGateway
+from .protocols import DecodedPosition, decode_with
 
 key_manager = KeyManager.from_env()
+map_service = MapService.from_env()
+notification_service = NotificationService.from_env()
+payment_gateway = PaymentGateway.from_env()
 
 app = FastAPI(title="GPS Tracking API", version="0.1")
 
@@ -91,6 +98,11 @@ init_db()
 
 if Instrumentator:
     Instrumentator().instrument(app).expose(app)
+
+
+@app.on_event("startup")
+async def start_workers():
+    await notification_service.start_worker()
 
 
 class PositionResponse(BaseModel):
@@ -125,6 +137,25 @@ class LiveStatus(BaseModel):
     speed: float | None = None
     ignition: bool | None = None
     last_update: str | None = None
+
+
+class RouteLegResponse(BaseModel):
+    distance_km: float
+    duration_minutes: float
+    geometry: list[tuple[float, float]]
+
+
+class MapRouteRequest(BaseModel):
+    origin: str
+    destination: str
+    waypoints: list[str] | None = None
+
+
+class ReverseGeocodeResponse(BaseModel):
+    label: str
+    latitude: float
+    longitude: float
+    provider: str
 
 
 class DateRangeQuery(BaseModel):
@@ -319,6 +350,34 @@ class ContactResponse(BaseModel):
         )
 
 
+class NotificationPayload(BaseModel):
+    channel: str
+    recipient: str
+    subject: str | None = None
+    body: str | None = None
+    metadata: dict[str, str] | None = None
+
+
+class PaymentSessionRequest(BaseModel):
+    amount: int = Field(..., gt=0, description="Monto en unidades mínimas (céntimos)")
+    currency: str = Field("usd", description="Código de moneda ISO")
+    description: str
+    provider: str | None = Field(None, description="stripe o mercadopago")
+
+
+class PaymentSessionResponse(BaseModel):
+    provider: str
+    checkout_url: str
+    amount: int
+    currency: str
+    description: str
+
+
+class ProtocolIngestPayload(BaseModel):
+    protocol: str
+    payload: str
+
+
 class AlertPayload(BaseModel):
     username: str
     name: str
@@ -428,6 +487,32 @@ broadcaster = LiveBroadcaster()
 async def health():
     """Endpoint de salud para comprobar que la API funciona."""
     return {"status": "ok"}
+
+
+@app.get("/maps/tiles/{z}/{x}/{y}")
+async def map_tiles(z: int, x: int, y: int):
+    """Devuelve la URL firmada o pública de un tile."""
+
+    return {"url": map_service.tile_url(z, x, y), "provider": getattr(map_service.provider, "name", "unknown")}
+
+
+@app.get("/maps/reverse", response_model=ReverseGeocodeResponse)
+async def reverse_geocode(lat: float, lon: float):
+    """Geocodificación inversa usando el proveedor configurado."""
+
+    result = await map_service.reverse_geocode(lat, lon)
+    return ReverseGeocodeResponse(**result.__dict__)
+
+
+@app.post("/maps/route", response_model=list[RouteLegResponse])
+async def map_route(body: MapRouteRequest):
+    """Calcula una ruta entre dos coordenadas con waypoints opcionales."""
+
+    origin = parse_coordinate_pair(body.origin)
+    destination = parse_coordinate_pair(body.destination)
+    waypoints = [parse_coordinate_pair(item) for item in body.waypoints] if body.waypoints else None
+    legs = await map_service.route(origin, destination, waypoints)
+    return [RouteLegResponse(**leg.__dict__) for leg in legs]
 
 
 @app.get("/devices/{device_id}/latest", response_model=PositionResponse)
@@ -546,6 +631,34 @@ async def ingest_http(
         engine=engine,
     )
 
+    await broadcaster.broadcast(PositionResponse.from_orm(position).dict())
+    return PositionResponse.from_orm(position)
+
+
+@app.post("/ingest/protocol", response_model=PositionResponse)
+async def ingest_protocol(
+    payload: ProtocolIngestPayload,
+    x_device_token: str = Header(..., alias="X-Device-Token"),
+):
+    """Ingresa mensajes crudos de protocolos populares (Teltonika/Queclink/Concox)."""
+
+    decoded: DecodedPosition = decode_with(payload.protocol, payload.payload.encode())
+    device = get_device_by_token(x_device_token)
+    if not device:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token de dispositivo inválido")
+    if decoded.device_id and decoded.device_id != device.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Dispositivo no coincide con el token")
+
+    position = save_position(
+        device_id=device.id,
+        latitude=decoded.latitude,
+        longitude=decoded.longitude,
+        speed=decoded.speed,
+        course=decoded.course,
+        event_type=decoded.event_type,
+        timestamp=decoded.timestamp or datetime.utcnow(),
+        engine=get_engine(),
+    )
     await broadcaster.broadcast(PositionResponse.from_orm(position).dict())
     return PositionResponse.from_orm(position)
 
@@ -687,6 +800,25 @@ async def list_alerts_endpoint(
     return [AlertResponse.from_orm(alert) for alert in alerts]
 
 
+@app.post("/notifications/queue")
+async def enqueue_notification(
+    payload: NotificationPayload,
+    current_user=Depends(require_roles(Roles.ADMIN, Roles.OPERATOR, Roles.CLIENT)),
+):
+    """Encola notificaciones a SES/Twilio/FCM usando Redis o fallback en memoria."""
+
+    message = NotificationMessage(
+        channel=payload.channel,
+        recipient=payload.recipient,
+        subject=payload.subject,
+        body=payload.body,
+        metadata=payload.metadata or {},
+    )
+    await notification_service.enqueue(message)
+    audit("notification.enqueue", current_user.username, {"channel": payload.channel, "recipient": payload.recipient})
+    return {"queued": True}
+
+
 def _positions_to_csv(rows: list[Position]) -> str:
     header = "timestamp,latitude,longitude,speed,course,ignition"
     lines = [header]
@@ -819,6 +951,34 @@ async def get_account_profile_endpoint(
     if not profile:
         profile = save_account_profile(user, engine=get_engine())
     return AccountProfileResponse.from_orm(profile)
+
+
+@app.post("/payments/session", response_model=PaymentSessionResponse)
+async def create_payment_session(
+    body: PaymentSessionRequest, current_user=Depends(require_roles(Roles.ADMIN, Roles.OPERATOR, Roles.CLIENT))
+):
+    """Crea una sesión de checkout en Stripe o MercadoPago y devuelve la URL de pago."""
+
+    gateway = payment_gateway if not body.provider else PaymentGateway.from_env(body.provider)
+    session = gateway.create_checkout(body.amount, body.currency, body.description)
+    audit(
+        "payment.session",
+        current_user.username,
+        {"provider": session.provider, "amount": body.amount, "currency": body.currency},
+    )
+    return PaymentSessionResponse(**session.__dict__)
+
+
+@app.post("/payments/webhook")
+async def payment_webhook(request: Request, x_signature: str = Header(None, alias="X-Signature")):
+    """Webhook seguro validado mediante HMAC configurable."""
+
+    payload = await request.body()
+    if not x_signature or not payment_gateway.verify_signature(x_signature, payload):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Firma inválida")
+    event = payment_gateway.parse_event(payload)
+    audit("payment.webhook", event.get("user", "webhook"), {"provider": event.get("provider", "unknown")})
+    return {"received": True}
 
 
 @app.post("/account/mfa/enable", response_model=MfaSetupResponse)
