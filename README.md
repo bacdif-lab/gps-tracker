@@ -2,6 +2,12 @@
 
 Stack de referencia para rastreo GPS con FastAPI, PostgreSQL/PostGIS y frontend estático detrás de un gateway Nginx.
 
+## Integraciones clave
+- Tiles, geocodificación inversa y ruteo vía `/api/maps/*` usando Mapbox u OSM según `MAP_PROVIDER`.
+- Notificaciones (correo/SMS/push) encoladas en Redis mediante `/api/notifications/queue` y worker asíncrono.
+- Pasarelas de pago (Stripe o MercadoPago) con creación de sesiones y webhook HMAC en `/api/payments/*`.
+- Ingesta de protocolos GPS populares (Teltonika/Queclink/Concox) vía `/api/ingest/protocol` o servidor TCP con adaptadores.
+
 ## Ejecución local
 1. Genera certificados locales en `deployments/gateway/certs` (`local.crt` y `local.key`).
 2. Levanta los servicios: `docker-compose up --build`.
