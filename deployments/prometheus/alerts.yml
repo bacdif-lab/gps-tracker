@@ -1,0 +1,38 @@
+groups:
+  - name: gps-slo
+    rules:
+      - alert: ApiLatencyP95High
+        expr: histogram_quantile(0.95, rate(gps_api_latency_seconds_bucket[5m])) > 0.5
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "Latencia API p95 elevada"
+          description: "p95 de latencia por handler sobrepasa 500ms durante 2m. Revisar tracing y DB."
+
+      - alert: IngestionTrafficDrop
+        expr: rate(gps_ingestions_total[5m]) < 1
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Ingestiones cayendo por debajo de 1/min"
+          description: "Los dispositivos no están publicando posiciones. Validar gateway/API/colas."
+
+      - alert: AlertDeliveryFailures
+        expr: increase(gps_alert_notifications_total{status="failed"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Fallos en entrega de alertas"
+          description: "Se detectaron entregas fallidas en el pipeline de alertas. Revisar logs y contactos."
+
+      - alert: DeviceOffline
+        expr: time() - gps_device_last_seen_epoch > 300
+        for: 0m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Dispositivo sin heartbeat >5m"
+          description: "El dispositivo {{ $labels.device_id }} no reporta hace más de 5 minutos."

@@ -57,6 +57,7 @@ from .database import (
     log_audit_event,
     update_user_mfa,
 )
+from .observability import Observability, record_ingestion
 from .auth import (
     verify_password,
     get_password_hash,
@@ -98,6 +99,8 @@ init_db()
 
 if Instrumentator:
     Instrumentator().instrument(app).expose(app)
+
+observability = Observability(app)
 
 
 @app.on_event("startup")
@@ -631,6 +634,7 @@ async def ingest_http(
         engine=engine,
     )
 
+    record_ingestion(device.id)
     await broadcaster.broadcast(PositionResponse.from_orm(position).dict())
     return PositionResponse.from_orm(position)
 

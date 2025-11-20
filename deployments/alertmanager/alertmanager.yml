@@ -1,0 +1,17 @@
+route:
+  receiver: default
+  group_by: ['alertname']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 3h
+
+receivers:
+  - name: default
+    webhook_configs:
+      - url: http://gateway:80/alerts/webhook
+        send_resolved: true
+    email_configs:
+      - to: oncall@example.com
+        from: noreply@gps-tracker.local
+        smarthost: smtp:25
+        require_tls: false

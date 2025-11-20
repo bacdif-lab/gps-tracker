@@ -22,7 +22,9 @@ Stack de referencia para rastreo GPS con FastAPI, PostgreSQL/PostGIS y frontend 
 
 ## CI/CD y observabilidad
 - Workflows de GitHub Actions en `.github/workflows` ejecutan lint, tests y builds de imágenes; los despliegues a staging/producción son hooks configurables.
-- Prometheus/Grafana se incluyen en `docker-compose.yml` y la API expone `/metrics` instrumentado.
+- Prometheus/Grafana/Alertmanager se incluyen en `docker-compose.yml` y la API expone `/metrics` instrumentado.
+- El tracing distribuido usa OpenTelemetry (OTLP) y perfiles opcionales con `ENABLE_PROFILING=1`.
+- Métricas clave, dashboards y playbooks de incidentes están documentados en `docs/observability.md`.
 
 Consulta `docs/README.md` para la guía de arquitectura, dependencias y flujos de datos, `docs/architecture.md` para la topología existente y `docs/operations.md` para detalles operativos.
 

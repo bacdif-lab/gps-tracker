@@ -7,4 +7,9 @@ python-jose[cryptography]
 psycopg2-binary
 prometheus-fastapi-instrumentator
 redis
-httpx
+prometheus-client
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-http
+opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-requests
+pyinstrument
