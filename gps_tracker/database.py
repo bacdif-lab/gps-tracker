@@ -5,7 +5,7 @@ Define un modelo sencillo para almacenar posiciones enviadas por dispositivos
 GPS. Para simplificar, utilizamos SQLite a través de SQLAlchemy.
 
 La tabla `Position` almacena la última posición recibida por cada dispositivo,
-adémas de un historial de posiciones si se consulta a través de la API.
+además de un historial de posiciones si se consulta a través de la API.
 
 Para una solución de producción, sería recomendable usar PostgreSQL
 u otro motor relacional escalable y añadir índices geoespaciales.
