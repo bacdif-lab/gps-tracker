@@ -16,7 +16,6 @@ from .database import (
     get_all_positions,
     get_engine,
     get_latest_position,
-    User,
     create_user,
     get_user,
 )
@@ -86,28 +85,4 @@ async def all_positions(device_id: str, limit: int = 100):
 
 
 @app.post("/register")
-async def register_user(user: UserCreate):
-    """Registra un nuevo usuario."""
-    existing_user = get_user(user.username)
-    if existing_user:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El nombre de usuario ya existe")
-    hashed_password = get_password_hash(user.password)
-    new_user = create_user(user.username, hashed_password)
-    return {"id": new_user.id, "username": new_user.username}
-
-
-@app.post("/token", response_model=Token)
-async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
-    """Genera un token de acceso para un usuario autenticado."""
-    user = get_user(form_data.username)
-    if not user or not verify_password(form_data.password, user.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Credenciales incorrectas",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user.username}, expires_delta=access_token_expires
-    )
-    return {"access_token": access_token, "token_type": "bearer"}
+asyn...
