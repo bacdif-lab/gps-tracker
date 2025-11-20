@@ -5,7 +5,7 @@ GitHub Actions ejecuta lint, tests y builds de imágenes:
 - **Lint**: `flake8` placeholder (se puede ampliar con ruff/mypy).
 - **Tests**: `pytest` con dependencias en `requirements-dev.txt`.
 - **Build web**: construcción de la imagen del frontend (`Dockerfile.frontend`).
-- **Build móvil**: etapa placeholder para pipelines móviles (Expo/React Native) que se puede sustituir por el comando real.
+- **Build móvil**: usa secrets de firma (`APP_STORE_CONNECT_API_KEY`, `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`) y ejecuta `eas build --profile production` (Expo) o `fastlane ios beta` / `fastlane android beta` para generar IPA/AAB listos para TestFlight/Play Store Internal Testing.
 
 ## CD
 El workflow `cd.yml` despliega a los entornos declarados:
