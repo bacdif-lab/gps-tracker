@@ -50,7 +50,23 @@ Ambos jobs son hooks listos para reemplazar con comandos de infraestructura (Hel
 
 ### Rotación de secretos
 - Gestionar secretos en un vault (AWS Secrets Manager, GCP SM, Vault) y montarlos como variables/archivos en los contenedores.
-- Rotar `JWT_SECRET`, claves de DB y tokens de mapas con doble publicación: 1) agregar el secreto nuevo y reiniciar los pods, 2) revocar el antiguo y reiniciar nuevamente.
+- Rotar `JWT_SECRET`, claves de DB, tokens de mapas y credenciales FCM/APNs con doble publicación: 1) agregar el secreto nuevo y reiniciar los pods, 2) revocar el antiguo y reiniciar nuevamente.
+- Durante la ventana de rotación, valida que la API responde `200` en `/health`, que el gateway sigue sirviendo al frontend y que los workers de notificaciones continúan entregando mensajes (FCM/APNs) antes de revocar la clave antigua.
+- En rotaciones de DB, usa cuentas con password temporal y prueba conexiones de lectura/escritura antes de forzar el corte; para JWT verifica que sesiones activas se renuevan con el nuevo secreto.
+
+### Expiraciones y alertas preventivas
+- Configura alertas que avisen al menos 7 días antes de vencer certificados TLS, credenciales de mapas y claves FCM/APNs; usa jobs programados o reglas en Alertmanager (webhook/email).
+- Documenta las fechas de expiración en el vault y revisa semanalmente las claves cercanas a vencimiento; automatiza la creación de tickets para rotaciones pendientes.
+- Integra monitoreo que detecte fallos de publicación dual (p. ej., entregas FCM/APNs que caen a cero durante la rotación) para disparar rollback temprano.
+
+### Semillas y usuarios demo
+- Bloquear el contenedor `seed` en producción; únicamente habilitarlo en staging para validar dashboards y datos de prueba.
+- Deshabilitar o eliminar usuarios demo antes de exponer tráfico real; auditar accesos en cada despliegue mediante `AuditLog` y alertas por inicio de sesión de cuentas no productivas.
+
+### Controles web (CORS/CSRF, rate limiting, MFA)
+- Define `CORS_ALLOW_ORIGINS` con el dominio del gateway/frontend y evita comodines en producción; mantén `X-CSRF-Token` y `X-MFA-Code` en la lista de headers permitidos.
+- El rate limiting de API (`RATE_LIMIT_PER_MINUTE`) debe ajustarse según la carga esperada y medirse con métricas de rechazo (`HTTP 429`).
+- Requiere MFA para administradores y operadores de paneles; verifica enrolamiento y fallback seguro antes de cada ventana de cambios de credenciales.
 - Automatizar rotaciones con pipelines programados y alertas de expiración (por ejemplo, 7 días antes de caducar certificados TLS o claves FCM/APNs).
 
 ### Playbooks rápidos

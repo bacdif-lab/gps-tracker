@@ -8,6 +8,7 @@ endpoint de salud para comprobar que la API está corriendo.
 
 import asyncio
 import json
+import os
 from datetime import datetime, timedelta
 from fastapi import Depends, FastAPI, HTTPException, Header, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -88,7 +89,12 @@ app = FastAPI(title="GPS Tracking API", version="0.1")
 app.add_middleware(HTTPSRedirectMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        origin.strip()
+        for origin in os.getenv("CORS_ALLOW_ORIGINS", "").split(",")
+        if origin.strip()
+    ]
+    or ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["Authorization", "Content-Type", "X-CSRF-Token", "X-MFA-Code"],
@@ -238,8 +244,7 @@ class RequestRateLimiter:
         self._counters[client_ip] = timestamps
         return len(timestamps) <= self.limit_per_minute
 
-
-rate_limiter = RequestRateLimiter()
+rate_limiter = RequestRateLimiter(limit_per_minute=int(os.getenv("RATE_LIMIT_PER_MINUTE", "120")))
 
 
 @app.middleware("http")
