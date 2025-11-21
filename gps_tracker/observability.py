@@ -84,6 +84,11 @@ class Observability:
             {
                 "service.name": os.getenv("OTEL_SERVICE_NAME", "gps-tracker-api"),
                 "service.namespace": os.getenv("OTEL_SERVICE_NAMESPACE", "gps"),
+                "service.version": os.getenv("OTEL_SERVICE_VERSION", "dev"),
+                "deployment.environment": os.getenv(
+                    "OTEL_DEPLOYMENT_ENVIRONMENT",
+                    os.getenv("ENVIRONMENT", "local"),
+                ),
                 "service.instance.id": os.getenv("HOSTNAME", "local"),
             }
         )
