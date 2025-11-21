@@ -2,22 +2,27 @@ groups:
   - name: gps-slo
     rules:
       - alert: ApiLatencyP95High
-        expr: histogram_quantile(0.95, rate(gps_api_latency_seconds_bucket[5m])) > 0.5
-        for: 2m
+        expr: histogram_quantile(
+          0.95,
+          sum(rate(gps_api_latency_seconds_bucket[5m])) by (le, path)
+        ) > 0.45
+        for: 5m
         labels:
           severity: page
         annotations:
           summary: "Latencia API p95 elevada"
-          description: "p95 de latencia por handler sobrepasa 500ms durante 2m. Revisar tracing y DB."
+          description: "p95 de latencia por handler sobrepasa 450ms durante 5m. Revisar tracing y DB."
+          runbook: "docs/observability.md#alerta-de-latencia-p95-alta"
 
       - alert: IngestionTrafficDrop
-        expr: rate(gps_ingestions_total[5m]) < 1
+        expr: sum(rate(gps_ingestions_total[5m])) < 0.5
         for: 5m
         labels:
           severity: page
         annotations:
           summary: "Ingestiones cayendo por debajo de 1/min"
-          description: "Los dispositivos no están publicando posiciones. Validar gateway/API/colas."
+          description: "Los dispositivos no están publicando posiciones de forma sostenida. Validar gateway/API/colas."
+          runbook: "docs/observability.md#caida-de-ingestiones"
 
       - alert: AlertDeliveryFailures
         expr: increase(gps_alert_notifications_total{status="failed"}[5m]) > 0
@@ -27,12 +32,14 @@ groups:
         annotations:
           summary: "Fallos en entrega de alertas"
           description: "Se detectaron entregas fallidas en el pipeline de alertas. Revisar logs y contactos."
+          runbook: "docs/observability.md#fallos-en-entrega-de-alertas"
 
       - alert: DeviceOffline
-        expr: time() - gps_device_last_seen_epoch > 300
-        for: 0m
+        expr: time() - max_over_time(gps_device_last_seen_epoch[5m]) > 300
+        for: 2m
         labels:
           severity: ticket
         annotations:
           summary: "Dispositivo sin heartbeat >5m"
           description: "El dispositivo {{ $labels.device_id }} no reporta hace más de 5 minutos."
+          runbook: "docs/observability.md#dispositivo-sin-heartbeat"
