@@ -28,6 +28,14 @@
 - Habilita perfiles de rendimiento activando `ENABLE_PROFILING=1` (genera `profile.txt` en el contenedor, configurable con `PROFILE_OUTPUT`).
 - El tracing instrumenta FastAPI y las llamadas `requests`/`httpx`, permitiendo seguir la latencia end-to-end.
 
+## Contactos on-call y soporte
+
+- **Guardia primaria**: `oncall@gps-tracker.local` (`@oncall-backend` en chat). Tiempo de respuesta esperado: 15 minutos.
+- **Guardia secundaria**: `sre@gps-tracker.local` (`@oncall-sre`). Escalar si no hay ACK en 15 minutos.
+- **Canal de incidentes**: `#incidentes-gps` (Slack/Teams). Todas las alertas de Alertmanager y las menciones de guardia deben replicarse aquí.
+- **Teléfono de emergencia**: `+1-555-0100` (solo para severidad 1 y caídas totales).
+- **Runbooks/playbooks**: ver sección siguiente y `docs/operations.md` para pasos de reinicio controlado y failover.
+
 ## Playbooks de incidentes (on-call)
 
 1. **Alerta de latencia p95 alta**
