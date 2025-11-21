@@ -1,6 +1,6 @@
 # Observabilidad, alertas y soporte
 
-## Métricas clave
+## Métricas clave y validaciones rápidas
 
 - **Ingestiones/minuto**: `sum(rate(gps_ingestions_total[1m]))`.
   - Detecta caídas de flujo de posiciones o retardo de colas.
@@ -11,22 +11,62 @@
 - **Uptime de dispositivos**:
   - Último heartbeat: `gps_device_last_seen_epoch` por `device_id`.
   - Estado online/offline: `gps_device_online{device_id="<id>"}`; alert rule usa 5 minutos de silencio.
+- **Scrape y dashboards**:
+  - `/metrics` se expone en la API y Prometheus lo recoge cada 15s (`deployments/prometheus/prometheus.yml` -> job `api`).
+  - Verifica `http://localhost:9090/targets` para confirmar estado `UP` y `http://localhost:3000` carga el dashboard `gps-observability` sin datasources faltantes (provisión apunta a la carpeta `deployments/grafana/dashboards`).
 
 ## Dashboards y alertas
 
 - Grafana carga automáticamente el dashboard `deployments/grafana/dashboards/gps-observability.json` (provisión en `/etc/grafana/provisioning`).
   - Incluye ingestiones/min, latencia p95, alertas entregadas/errores y uptime por dispositivo.
 - Prometheus aplica reglas en `deployments/prometheus/alerts.yml` y envía a Alertmanager (`docker-compose` expone `:9093`).
-  - Páginas: latencia p95 > 500 ms durante 2m o ingestiones < 1/min por 5m.
+  - Páginas: latencia p95 > 450 ms durante 5m o ingestiones < 0.5/min por 5m.
   - Tickets: fallos de entrega de alertas o dispositivos sin heartbeat > 5m.
 - Alertmanager reenvía a webhook (`/alerts/webhook` en el gateway) y a `oncall@example.com`; ajusta receptores según tu sistema de guardias.
 
 ## Tracing distribuido y perfiles
 
 - Exporta trazas OTLP configurando `OTEL_EXPORTER_OTLP_ENDPOINT` (por ejemplo `http://otel-collector:4318/v1/traces`).
-  - Variables opcionales: `OTEL_SERVICE_NAME`, `OTEL_SERVICE_NAMESPACE`, `OTEL_EXPORTER_OTLP_TIMEOUT`.
+  - Variables opcionales: `OTEL_SERVICE_NAME`, `OTEL_SERVICE_NAMESPACE`, `OTEL_SERVICE_VERSION`, `OTEL_DEPLOYMENT_ENVIRONMENT`, `OTEL_EXPORTER_OTLP_TIMEOUT`.
+  - Los spans incluyen `service.name=gps-tracker-api`, `service.namespace=gps`, `service.version` (default `dev`) y `deployment.environment` (default `local`).
 - Habilita perfiles de rendimiento activando `ENABLE_PROFILING=1` (genera `profile.txt` en el contenedor, configurable con `PROFILE_OUTPUT`).
 - El tracing instrumenta FastAPI y las llamadas `requests`/`httpx`, permitiendo seguir la latencia end-to-end.
+
+## Validación de alertas (datos simulados)
+
+- Ejecuta tests sintéticos de reglas con promtool: `docker run --rm -v $(pwd)/deployments/prometheus:/etc/prometheus prom/prometheus:v2.53.2 promtool test rules /etc/prometheus/alerts.test.yml`.
+  - El fixture `deployments/prometheus/alerts.test.yml` fuerza picos de p95, caídas de ingestión y dispositivos sin heartbeat para validar Alertmanager.
+- Para verlas encendidas en Alertmanager local, sube el stack (`docker-compose up prometheus alertmanager api`) y consulta `http://localhost:9093`.
+
+## Runbooks por alerta
+
+### Alerta de latencia p95 alta
+- Umbral: p95 > 450 ms sostenidos por 5m (se agrupa por `path`).
+- Pasos:
+  1. Revisar panel "Latencia API p95" en Grafana por ruta y comparar con trazas filtrando `deployment.environment`.
+  2. Validar conexiones a DB/Redis y recientes despliegues; si hay regresión, aplicar rollback o escalar replicas.
+  3. Capturar perfiles (`ENABLE_PROFILING=1`) durante 2-3 minutos y adjuntar al ticket.
+
+### Caída de ingestiones
+- Umbral: `sum(rate(gps_ingestions_total[5m])) < 0.5` durante 5m.
+- Pasos:
+  1. Confirmar en Grafana que los paneles de ingestiones están planos; revisar gateway `/health` y logs de API.
+  2. Validar Redis/colas y certificados de dispositivos; reintentar con `scripts/synthetic_checks.py` para varios `X-Region`.
+  3. Si afecta a un subconjunto, contactar clientes afectados; documentar reinicios o cortes de red.
+
+### Fallos en entrega de alertas
+- Umbral: `increase(gps_alert_notifications_total{status="failed"}[5m]) > 0` (ticket).
+- Pasos:
+  1. Revisar panel de alertas entregadas/errores por `status` y logs del servicio de notificaciones.
+  2. Forzar un reintento manual o cambiar de canal (SMS/push). Si es masivo, pausar el pipeline y redirigir a webhook de fallback.
+  3. Registrar causa raíz y contactos fallidos en el postmortem.
+
+### Dispositivo sin heartbeat
+- Umbral: sin actualización de `gps_device_last_seen_epoch` > 5m (evalúa ventanas de 5m y espera 2m antes de alertar).
+- Pasos:
+  1. Revisar panel "Uptime por dispositivo"; si sólo afecta a un equipo, validar token/certificados del dispositivo.
+  2. Consultar `/fleet/live?device_id=<id>` y verificar si hay latencia o colas atrasadas.
+  3. Escalar a soporte de campo si persiste >15m y documentar acciones en el ticket.
 
 ## Playbooks de incidentes (on-call)
 
