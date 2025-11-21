@@ -95,3 +95,28 @@ Ambos jobs son hooks listos para reemplazar con comandos de infraestructura (Hel
 - **Reinicio controlado de API**: drenar tráfico en el gateway/ingress, esperar a que no haya requests en curso y reiniciar los pods; validar `/health` antes de volver a enrutar.
 - **Failover de DB**: apuntar `DATABASE_URL` al replica/promote seleccionado, vaciar conexiones viejas y recalentar caches en Redis (p. ej., precargar vehículos activos).
 - **Recuperación de Redis**: si se pierde la cola, reprocesar eventos desde una tabla de staging en PostgreSQL y volver a publicar en Redis.
+
+## Checklist de release
+
+Mantén este checklist como evidencia de cada entrega. Marca **Resultado** con `OK`/`FALLA`, enlaza la **Evidencia** (builds, capturas, reportes) y asigna un **Responsable**.
+
+| Validación | Resultado | Evidencia | Responsable |
+| --- | --- | --- | --- |
+| Lint y tests backend (`pytest`) |  |  |  |
+| Lint y tests frontend (`npm test`/`npm run lint`) |  |  |  |
+| Build de imagen API (`Dockerfile.api`) |  |  |  |
+| Build de imagen frontend (`Dockerfile.frontend`) |  |  |  |
+| Migraciones aplicadas en base de datos |  |  |  |
+| Pruebas de humo post-despliegue (healthcheck y login) |  |  |  |
+| Probes sintéticos (`scripts/synthetic_checks.py`) |  |  |  |
+| Monitoreo de errores (Alertmanager/Grafana sin alertas abiertas) |  |  |  |
+
+## Registro de artefactos y despliegue
+
+Documenta la versión exacta de cada componente y cuándo se desplegó. Guarda los hashes de imagen o commit para trazabilidad y rollback rápido.
+
+- **API**: versión `vX.Y.Z`, imagen `registry/api:vX.Y.Z`, digest `sha256:<hash>`
+- **Frontend**: versión `vX.Y.Z`, imagen `registry/frontend:vX.Y.Z`, digest `sha256:<hash>`
+- **Infra/seed**: etiquetas o commits usados en `deployments/*`
+- **Fecha/hora de despliegue**: `YYYY-MM-DD HH:MM TZ` y ventana de mantenimiento (si aplica)
+- **Resultado**: `OK`/`Rollback`, enlaces a pipeline y dashboard de salud post-release
