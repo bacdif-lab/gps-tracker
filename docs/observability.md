@@ -1,6 +1,6 @@
 # Observabilidad, alertas y soporte
 
-## Métricas clave
+## Métricas clave y validaciones rápidas
 
 - **Ingestiones/minuto**: `sum(rate(gps_ingestions_total[1m]))`.
   - Detecta caídas de flujo de posiciones o retardo de colas.
@@ -11,20 +11,24 @@
 - **Uptime de dispositivos**:
   - Último heartbeat: `gps_device_last_seen_epoch` por `device_id`.
   - Estado online/offline: `gps_device_online{device_id="<id>"}`; alert rule usa 5 minutos de silencio.
+- **Scrape y dashboards**:
+  - `/metrics` se expone en la API y Prometheus lo recoge cada 15s (`deployments/prometheus/prometheus.yml` -> job `api`).
+  - Verifica `http://localhost:9090/targets` para confirmar estado `UP` y `http://localhost:3000` carga el dashboard `gps-observability` sin datasources faltantes (provisión apunta a la carpeta `deployments/grafana/dashboards`).
 
 ## Dashboards y alertas
 
 - Grafana carga automáticamente el dashboard `deployments/grafana/dashboards/gps-observability.json` (provisión en `/etc/grafana/provisioning`).
   - Incluye ingestiones/min, latencia p95, alertas entregadas/errores y uptime por dispositivo.
 - Prometheus aplica reglas en `deployments/prometheus/alerts.yml` y envía a Alertmanager (`docker-compose` expone `:9093`).
-  - Páginas: latencia p95 > 500 ms durante 2m o ingestiones < 1/min por 5m.
+  - Páginas: latencia p95 > 450 ms durante 5m o ingestiones < 0.5/min por 5m.
   - Tickets: fallos de entrega de alertas o dispositivos sin heartbeat > 5m.
 - Alertmanager reenvía a webhook (`/alerts/webhook` en el gateway) y a `oncall@example.com`; ajusta receptores según tu sistema de guardias.
 
 ## Tracing distribuido y perfiles
 
 - Exporta trazas OTLP configurando `OTEL_EXPORTER_OTLP_ENDPOINT` (por ejemplo `http://otel-collector:4318/v1/traces`).
-  - Variables opcionales: `OTEL_SERVICE_NAME`, `OTEL_SERVICE_NAMESPACE`, `OTEL_EXPORTER_OTLP_TIMEOUT`.
+  - Variables opcionales: `OTEL_SERVICE_NAME`, `OTEL_SERVICE_NAMESPACE`, `OTEL_SERVICE_VERSION`, `OTEL_DEPLOYMENT_ENVIRONMENT`, `OTEL_EXPORTER_OTLP_TIMEOUT`.
+  - Los spans incluyen `service.name=gps-tracker-api`, `service.namespace=gps`, `service.version` (default `dev`) y `deployment.environment` (default `local`).
 - Habilita perfiles de rendimiento activando `ENABLE_PROFILING=1` (genera `profile.txt` en el contenedor, configurable con `PROFILE_OUTPUT`).
 - El tracing instrumenta FastAPI y las llamadas `requests`/`httpx`, permitiendo seguir la latencia end-to-end.
 
