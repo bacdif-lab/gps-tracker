@@ -48,6 +48,28 @@ Ambos jobs son hooks listos para reemplazar con comandos de infraestructura (Hel
 - **Restore**: `pg_restore --clean --if-exists --no-owner --dbname="$DATABASE_URL" backups/gps-YYYY-MM-DD.dump`; realizar en una base vacía o en instancia temporal para verificaciones.
 - **Point-in-time**: habilitar WAL archiving en PostgreSQL gestionado para recuperar hasta el último segmento disponible.
 
+#### Procedimiento staging → instancia temporal
+- Ejecuta el backup en la base de datos de **staging** desde un runner con acceso privado: `pg_dump -Fc "$STAGING_DATABASE_URL" -f /tmp/gps-staging-$(date +%F).dump`.
+- Crea una instancia temporal (PostgreSQL + PostGIS) con la misma versión que staging y restaura: `pg_restore --clean --if-exists --no-owner --dbname="$TEMP_DATABASE_URL" /tmp/gps-staging-YYYY-MM-DD.dump`.
+- Verifica que las extensiones se hayan aplicado: `\dx` debe listar `postgis` y `postgis_topology`; si faltan, crear con `CREATE EXTENSION IF NOT EXISTS postgis;` antes del restore.
+- Limpia el artefacto de backup en el runner y en la instancia temporal tras validar (evitar filtraciones de datos sensibles).
+
+#### Validación de PostGIS tras el restore
+- Comprobar que todas las columnas geométricas existan: `SELECT f_table_schema, f_table_name, f_geometry_column FROM geometry_columns;`.
+- Validar geometrías corruptas: `SELECT id FROM positions WHERE NOT ST_IsValid(geom);` (ajustar tabla/columna según esquema). Normalizar con `UPDATE positions SET geom = ST_MakeValid(geom) WHERE NOT ST_IsValid(geom);`.
+- Confirmar SRID correcto: `SELECT DISTINCT ST_SRID(geom) FROM positions;` debería devolver el SRID esperado (p. ej. 4326).
+- Regenerar índices espaciales si el restore los omitió: `REINDEX INDEX CONCURRENTLY positions_geom_idx;` o `CREATE INDEX CONCURRENTLY IF NOT EXISTS positions_geom_idx ON positions USING GIST (geom);`.
+
+#### Reprocesar colas/eventos si Redis falla
+- Las ingestas se guardan en la tabla de staging de eventos (ej. `telemetry_staging`) antes de publicarse en Redis. Si la cola se pierde, extrae los eventos pendientes: `SELECT * FROM telemetry_staging WHERE redis_published_at IS NULL ORDER BY received_at;`.
+- Re-publica en Redis usando un script temporal en la API (por ejemplo, un comando de mantenimiento que lea los registros y publique en la misma lista/canal usado en producción). Marcar cada evento procesado con una columna de control (`redis_published_at` o `replayed_at`) para evitar duplicados.
+- Si el consumidor de Redis es idempotente, se puede re-publicar todo el rango de tiempo; de lo contrario, limitar por ventana (`received_at >= now() - interval '24 hours'`) y validar métricas de duplicados.
+- Tras finalizar, vaciar o archivar la tabla de staging para que no vuelva a reprocesarse en futuros playbooks.
+
+#### RPO/RTO de base de datos
+- **RPO**: ≤ 24 horas (respaldos diarios con `pg_dump`); puede reducirse a ~5 minutos con WAL archiving y réplicas configuradas.
+- **RTO**: ≤ 60 minutos para restaurar en instancia temporal (10-15 min backup + 30-40 min restore/validación según tamaño). En producción, sumar el tiempo de conmutar `DATABASE_URL` y recalentar caches (≈10 min adicionales).
+
 ### Rotación de secretos
 - Gestionar secretos en un vault (AWS Secrets Manager, GCP SM, Vault) y montarlos como variables/archivos en los contenedores.
 - Rotar `JWT_SECRET`, claves de DB y tokens de mapas con doble publicación: 1) agregar el secreto nuevo y reiniciar los pods, 2) revocar el antiguo y reiniciar nuevamente.
