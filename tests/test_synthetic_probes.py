@@ -1,17 +1,17 @@
+import asyncio
 import os
 import pathlib
 import sys
 
 import pytest
 
-httpx = pytest.importorskip("httpx")
-AsyncClient = httpx.AsyncClient
-
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
+
+from gps_tracker.synthetic_client import AsyncProbeClient
 
 os.environ["DATABASE_URL"] = "sqlite:///./test_synthetic.db"
 
-from gps_tracker.api import IngestPayload, app  # noqa: E402
+from gps_tracker.api import IngestPayload  # noqa: E402
 from gps_tracker.database import (  # noqa: E402
     create_device,
     create_user,
@@ -36,25 +36,31 @@ def device_token():
     return device.token
 
 
-@pytest.mark.asyncio
-async def test_health_probe_multiple_regions():
+def test_health_probe_multiple_regions():
     regions = ["us-east-1", "eu-west-1", "sa-east-1"]
-    async with AsyncClient(app=app, base_url="https://test") as client:
-        for region in regions:
-            response = await client.get("/health", headers={"X-Region": region})
-            assert response.status_code == 200
-            assert response.json() == {"status": "ok"}
+
+    async def _run():
+        async with AsyncProbeClient("asgi://local") as client:
+            for region in regions:
+                response = await client.get("/health", headers={"X-Region": region})
+                assert response.status_code == 200
+                assert response.json() == {"status": "ok"}
+
+    asyncio.run(_run())
 
 
-@pytest.mark.asyncio
-async def test_ingestion_probe_from_region(device_token):
+def test_ingestion_probe_from_region(device_token):
     payload = IngestPayload(latitude=10.0, longitude=-70.0, speed=32.5, event_type="synthetic")
-    async with AsyncClient(app=app, base_url="https://test") as client:
-        response = await client.post(
-            "/ingest/http",
-            json=payload.dict(),
-            headers={"X-Device-Token": device_token, "X-Region": "eu-west-1"},
-        )
+
+    async def _run():
+        async with AsyncProbeClient("asgi://local") as client:
+            return await client.post(
+                "/ingest/http",
+                json_body=payload.dict(),
+                headers={"X-Device-Token": device_token, "X-Region": "eu-west-1"},
+            )
+
+    response = asyncio.run(_run())
 
     assert response.status_code == 200
     body = response.json()

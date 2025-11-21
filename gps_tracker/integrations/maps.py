@@ -11,9 +11,6 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
-
-
 MAPBOX_STYLE = os.getenv("MAPBOX_STYLE", "streets-v12")
 
 
@@ -68,6 +65,8 @@ class MapboxProvider(MapProvider):
         )
 
     async def reverse_geocode(self, latitude: float, longitude: float) -> ReverseGeocodeResult:
+        import httpx
+
         url = f"https://api.mapbox.com/geocoding/v5/mapbox.places/{longitude},{latitude}.json"
         params = {"language": "es", "access_token": self.token}
         async with httpx.AsyncClient(timeout=10) as client:
@@ -87,6 +86,8 @@ class MapboxProvider(MapProvider):
     async def route(
         self, origin: tuple[float, float], destination: tuple[float, float], waypoints: list[tuple[float, float]] | None = None
     ) -> list[RouteLeg]:
+        import httpx
+
         coords = [origin, *(waypoints or []), destination]
         coord_str = ";".join(f"{lon},{lat}" for lat, lon in coords)
         url = f"https://api.mapbox.com/directions/v5/mapbox/driving/{coord_str}"
@@ -117,6 +118,8 @@ class OsmProvider(MapProvider):
         return f"https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 
     async def reverse_geocode(self, latitude: float, longitude: float) -> ReverseGeocodeResult:
+        import httpx
+
         url = "https://nominatim.openstreetmap.org/reverse"
         params = {"lat": latitude, "lon": longitude, "format": "json", "addressdetails": 0, "zoom": 16}
         headers = {"User-Agent": "gps-tracker/0.1"}
@@ -134,6 +137,8 @@ class OsmProvider(MapProvider):
     async def route(
         self, origin: tuple[float, float], destination: tuple[float, float], waypoints: list[tuple[float, float]] | None = None
     ) -> list[RouteLeg]:
+        import httpx
+
         coords = [origin, *(waypoints or []), destination]
         coord_str = ";".join(f"{lon},{lat}" for lat, lon in coords)
         url = f"https://router.project-osrm.org/route/v1/driving/{coord_str}"
